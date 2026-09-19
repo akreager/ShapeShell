@@ -21,6 +21,8 @@ Known behavior:
 
 ## Install
 
+Download `ShapeShell-<version>-x86_64.flatpak` from the [latest release](https://github.com/akreager/ShapeShell/releases/latest), then:
+
 ```bash
 flatpak install --user --bundle ShapeShell-0.1.0-x86_64.flatpak
 ```
