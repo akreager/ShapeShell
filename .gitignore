@@ -1,0 +1,27 @@
+node_modules/
+.electron/
+
+# electron-builder output (build/ is its INPUT dir for icons/metadata — do not ignore)
+dist/
+out/
+release/
+*.AppImage
+*.flatpak
+*.deb
+*.rpm
+*.blockmap
+
+logs/
+*.log
+
+.env
+.env.*
+
+.DS_Store
+*~
+.idea/
+.vscode/
+coverage/
+
+# built by scripts/fetch-bridge.sh
+resources/bridge/

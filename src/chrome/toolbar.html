@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ShapeShell toolbar</title>
+<style>
+  :root { --bg: #252526; --fg: #d4d4d4; --fg-dim: #8a8a8a; --hover: #37373a; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--fg);
+    font: 12px/1 system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
+    user-select: none;
+    cursor: default;
+  }
+  /* The bar drags the window; interactive children opt out with no-drag.
+     The padding reserves the strip the native window buttons are drawn in —
+     env(titlebar-area-*) tracks the GNOME button-layout setting, including
+     left-hand layouts, and is unset entirely in fullscreen (hence the fallbacks). */
+  .bar {
+    display: flex;
+    align-items: center;
+    height: 32px;
+    padding-left: env(titlebar-area-x, 0px);
+    padding-right: calc(100vw - env(titlebar-area-width, 100vw) - env(titlebar-area-x, 0px));
+    -webkit-app-region: drag;
+  }
+  .title {
+    flex: 1;
+    text-align: center;
+    padding: 0 8px;
+    color: var(--fg-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  button {
+    -webkit-app-region: no-drag;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 24px;
+    margin: 0 2px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--fg);
+    cursor: default;
+  }
+  button:hover { background: var(--hover); }
+  /* 16px box for a 16-unit viewBox, so strokes land on the pixel grid. A 2px stroke
+     centred on an even coordinate spans whole pixels; 15px/1.7 blurred it. */
+  button svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2; fill: none; shape-rendering: crispEdges; }
+  /* Balances the hamburger so the title stays optically centred. */
+  .spacer { width: 32px; flex: none; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <div class="spacer"></div>
+  <div class="title" id="title">Onshape</div>
+  <button id="menu" title="Main menu">
+    <svg viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
+  </button>
+</div>
+<script>
+  document.getElementById('menu').addEventListener('click', (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    window.shellApi.openMenu(Math.round(r.right), Math.round(r.bottom));
+  });
+
+  window.shellApi.onState((s) => {
+    document.getElementById('title').textContent = s.title || 'Onshape';
+  });
+</script>
+</body>
+</html>

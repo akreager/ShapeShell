@@ -1,0 +1,101 @@
+{
+  "name": "shapeshell",
+  "productName": "ShapeShell",
+  "version": "0.1.0",
+  "description": "Unofficial Linux desktop app for Onshape, with a SpaceMouse bridge built in",
+  "license": "MIT",
+  "private": true,
+  "type": "commonjs",
+  "main": "src/main.js",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "start": "bash scripts/run.sh .",
+    "start:xwayland": "bash scripts/run.sh . --ozone-platform=x11",
+    "gpu-check": "bash scripts/gpu-check.sh",
+    "fix-sandbox": "bash scripts/fix-sandbox.sh",
+    "fetch-bridge": "bash scripts/fetch-bridge.sh",
+    "calibrate": "resources/bridge/spacemouse-bridge -calibrate",
+    "bridge-config": "resources/bridge/spacemouse-bridge -show-config",
+    "fetch-electron": "install-electron",
+    "pack": "bash scripts/package.sh",
+    "pack:dir": "bash scripts/package.sh --dir",
+    "pack:flatpak": "bash scripts/package.sh --linux flatpak",
+    "icons": "bash scripts/render-icons.sh"
+  },
+  "devDependencies": {
+    "electron": "44.4.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "io.github.akreager.ShapeShell",
+    "productName": "ShapeShell",
+    "copyright": "Copyright \u00a9 2026 Allen",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bridge",
+        "to": "bridge",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "linux": {
+      "target": [
+        "flatpak"
+      ],
+      "category": "Graphics;Engineering",
+      "icon": "build/icons",
+      "synopsis": "Unofficial Linux desktop app for Onshape with SpaceMouse support",
+      "description": "An unofficial desktop app for Onshape with a 6-DOF SpaceMouse bridge built in. Not affiliated with Onshape or PTC.",
+      "syncDesktopName": true,
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "io.github.akreager.ShapeShell",
+          "Keywords": "CAD;Onshape;3D;SpaceMouse;"
+        }
+      }
+    },
+    "appImage": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "flatpak": {
+      "runtime": "org.freedesktop.Platform",
+      "runtimeVersion": "25.08",
+      "sdk": "org.freedesktop.Sdk",
+      "base": "org.electronjs.Electron2.BaseApp",
+      "baseVersion": "25.08",
+      "finishArgs": [
+        "--socket=wayland",
+        "--socket=fallback-x11",
+        "--share=ipc",
+        "--device=dri",
+        "--share=network",
+        "--filesystem=/run/spnav.sock",
+        "--filesystem=xdg-config/spacemouse-bridge:create"
+      ]
+    }
+  },
+  "author": {
+    "name": "Allen",
+    "email": "maintainer@shapeshell.invalid"
+  },
+  "desktopName": "io.github.akreager.ShapeShell.desktop",
+  "homepage": "https://github.com/akreager/ShapeShell",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/akreager/ShapeShell.git"
+  },
+  "bugs": {
+    "url": "https://github.com/akreager/ShapeShell/issues"
+  }
+}

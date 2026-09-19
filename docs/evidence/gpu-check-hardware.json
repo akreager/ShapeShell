@@ -1,0 +1,113 @@
+{
+  "verdict": {
+    "pass": true,
+    "failed": [],
+    "checks": {
+      "webglEnabled": true,
+      "gpuCompositing": true,
+      "webgl2": true,
+      "rendererIsNvidia": true,
+      "rendererNotSoftware": true,
+      "maxTextureSize": true,
+      "contextAlive": true,
+      "noGpuCrash": true
+    }
+  },
+  "probe": {
+    "ok": true,
+    "contextType": "webgl2",
+    "vendor": "Google Inc. (NVIDIA Corporation)",
+    "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce GTX 1660/PCIe/SSE2, OpenGL ES 3.2)",
+    "maskedRenderer": "WebKit WebGL",
+    "maxTextureSize": 32768,
+    "contextLost": false
+  },
+  "fps": {
+    "frameCount": 5,
+    "sampledFps": 1.7,
+    "medianFrameMs": 16.7,
+    "p95FrameMs": 283.3,
+    "medianFps": 59.9,
+    "contextLostAfter": false
+  },
+  "featureStatus": {
+    "2d_canvas": "enabled",
+    "direct_rendering_display_compositor": "disabled_off_ok",
+    "gpu_compositing": "enabled",
+    "multiple_raster_threads": "enabled_on",
+    "opengl": "enabled_on",
+    "rasterization": "enabled",
+    "raw_draw": "disabled_off_ok",
+    "skia_graphite": "disabled_off",
+    "trees_in_viz": "disabled_off",
+    "video_decode": "enabled",
+    "video_encode": "disabled_software",
+    "vulkan": "disabled_off",
+    "webgl": "enabled",
+    "webgpu": "enabled",
+    "webgpu_on_vk_via_gl_interop": "enabled",
+    "webnn": "disabled_off"
+  },
+  "gpuCrashes": [],
+  "env": {
+    "electron": "44.4.1",
+    "chrome": "152.0.7977.78",
+    "node": "24.21.0",
+    "xdgSessionType": "wayland",
+    "ozonePlatform": "wayland",
+    "argv": [
+      "scripts/gpu-check.js"
+    ],
+    "displays": [
+      {
+        "bounds": {
+          "x": 1920,
+          "y": 0,
+          "width": 1920,
+          "height": 1080
+        },
+        "scaleFactor": 1,
+        "rotation": 0
+      },
+      {
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1920,
+          "height": 1080
+        },
+        "scaleFactor": 1,
+        "rotation": 0
+      }
+    ]
+  },
+  "gpuInfo": {
+    "auxAttributes": {
+      "amdSwitchable": false,
+      "canSupportThreadedTextureMailbox": false,
+      "glImplementationParts": "(gl=none,angle=none)",
+      "glResetNotificationStrategy": 0,
+      "hardwareSupportsVulkan": false,
+      "inProcessGpu": true,
+      "initializationTime": 0,
+      "isAsan": false,
+      "isClangCoverage": false,
+      "jpegDecodeAcceleratorSupported": false,
+      "optimus": false,
+      "passthroughCmdDecoder": false,
+      "sandboxed": false,
+      "skiaBackendType": "None",
+      "subpixelFontRendering": true,
+      "targetCpuBits": 64,
+      "visibilityCallbackCallCount": 0
+    },
+    "gpuDevice": [
+      {
+        "active": true,
+        "deviceId": 8580,
+        "gpuPreference": 0,
+        "vendorId": 4318
+      }
+    ]
+  }
+}

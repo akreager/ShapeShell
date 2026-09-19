@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ShapeShell menu</title>
+<style>
+  :root { --panel: #303033; --fg: #e4e4e4; --fg-dim: #7d7d81; --hover: #3f3f44; --line: #4a4a4f; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    /* Transparent everywhere except the panel, so the window beneath shows through. */
+    background: transparent;
+    color: var(--fg);
+    font: 13px/1 system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
+    user-select: none;
+    cursor: default;
+    overflow: hidden;
+  }
+  #panel {
+    position: absolute;
+    min-width: 232px;
+    padding: 6px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .45);
+  }
+  .icons { display: flex; gap: 4px; padding: 2px 2px 6px; }
+  .icons button {
+    flex: 1;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .icons svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+  button {
+    display: block;
+    width: 100%;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--fg);
+    font: inherit;
+    text-align: left;
+    cursor: default;
+  }
+  button:hover:not(:disabled) { background: var(--hover); }
+  button:disabled { color: var(--fg-dim); }
+  hr { height: 1px; margin: 5px 2px; border: 0; background: var(--line); }
+</style>
+</head>
+<body>
+<div id="panel" hidden>
+  <div class="icons">
+    <button id="back" title="Back"><svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5"/></svg></button>
+    <button id="forward" title="Forward"><svg viewBox="0 0 16 16"><path d="M6 3l5 5-5 5"/></svg></button>
+    <button id="reload" title="Reload"><svg viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5V5h-2.5"/></svg></button>
+  </div>
+  <hr>
+  <button data-act="home">Documents</button>
+  <button data-act="newWindow">New Window</button>
+  <hr>
+  <button data-act="quit">Quit</button>
+</div>
+<script>
+  const panel = document.getElementById('panel');
+  const send = (verb) => window.menuApi.action(verb);
+
+  document.getElementById('back').addEventListener('click', () => send('back'));
+  document.getElementById('forward').addEventListener('click', () => send('forward'));
+  document.getElementById('reload').addEventListener('click', () => send('reload'));
+  for (const el of document.querySelectorAll('[data-act]')) {
+    el.addEventListener('click', () => send(el.dataset.act));
+  }
+
+  // Anything outside the panel dismisses, matching a native popover.
+  document.body.addEventListener('mousedown', (e) => {
+    if (!panel.contains(e.target)) window.menuApi.close();
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') window.menuApi.close();
+  });
+
+  window.menuApi.onOpen((state) => {
+    document.getElementById('back').disabled = !state.canGoBack;
+    document.getElementById('forward').disabled = !state.canGoForward;
+
+    panel.hidden = false;
+    // Anchor under the hamburger, clamped so the panel never leaves the window.
+    const w = panel.offsetWidth;
+    const left = Math.max(6, Math.min(state.x - w, window.innerWidth - w - 6));
+    panel.style.left = left + 'px';
+    panel.style.top = Math.max(6, state.y + 4) + 'px';
+  });
+</script>
+</body>
+</html>

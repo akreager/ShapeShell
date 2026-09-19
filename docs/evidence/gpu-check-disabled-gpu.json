@@ -1,0 +1,83 @@
+{
+  "verdict": {
+    "pass": false,
+    "failed": [
+      "webglEnabled",
+      "gpuCompositing",
+      "rendererIsNvidia",
+      "maxTextureSize",
+      "contextAlive"
+    ],
+    "checks": {
+      "webglEnabled": false,
+      "gpuCompositing": false,
+      "webgl2": true,
+      "rendererIsNvidia": false,
+      "rendererNotSoftware": true,
+      "maxTextureSize": false,
+      "contextAlive": false,
+      "noGpuCrash": true
+    }
+  },
+  "probe": {
+    "ok": false,
+    "reason": "getContext returned null",
+    "contextType": null
+  },
+  "fps": null,
+  "featureStatus": {
+    "2d_canvas": "disabled_software",
+    "direct_rendering_display_compositor": "disabled_off_ok",
+    "gpu_compositing": "disabled_software",
+    "multiple_raster_threads": "disabled_off",
+    "opengl": "disabled_off",
+    "rasterization": "disabled_software",
+    "raw_draw": "disabled_off_ok",
+    "skia_graphite": "disabled_off",
+    "trees_in_viz": "disabled_off",
+    "video_decode": "disabled_software",
+    "video_encode": "disabled_software",
+    "vulkan": "disabled_off",
+    "webgl": "disabled_off",
+    "webgpu": "disabled_off",
+    "webgpu_on_vk_via_gl_interop": "disabled_off",
+    "webnn": "disabled_off"
+  },
+  "gpuCrashes": [],
+  "env": {
+    "electron": "44.4.1",
+    "chrome": "152.0.7977.78",
+    "node": "24.21.0",
+    "xdgSessionType": "wayland",
+    "ozonePlatform": "wayland",
+    "argv": [
+      "scripts/gpu-check.js",
+      "--disable-gpu"
+    ],
+    "displays": [
+      {
+        "bounds": {
+          "x": 1920,
+          "y": 0,
+          "width": 1920,
+          "height": 1080
+        },
+        "scaleFactor": 1,
+        "rotation": 0
+      },
+      {
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1920,
+          "height": 1080
+        },
+        "scaleFactor": 1,
+        "rotation": 0
+      }
+    ]
+  },
+  "gpuInfo": {
+    "error": "Error: GPU access not allowed. Reason: GPU access is disabled through commandline switch --disable-gpu and --disable-software-rasterizer."
+  }
+}
