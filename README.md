@@ -2,7 +2,7 @@
 
 An unofficial Linux desktop app for [Onshape](https://cad.onshape.com), distributed as a Flatpak, with 6-DOF SpaceMouse support built in — no manual bridge process, no cert import, no Tampermonkey, and no privileged setup.
 
-> Not affiliated with, endorsed by, or supported by Onshape or PTC. "Onshape" is a trademark of PTC Inc. This project wraps the public Onshape web app; you need your own Onshape account.
+> Not affiliated with, endorsed by, or supported by Onshape, PTC, 3Dconnexion, or Logitech. "Onshape" is a trademark of PTC Inc.; "3Dconnexion", "SpaceMouse" and "SpaceNavigator" are trademarks of 3Dconnexion; all other trademarks belong to their respective owners. This project wraps the public Onshape web app; you need your own Onshape account.
 
 ## Features
 
