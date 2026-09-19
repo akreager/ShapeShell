@@ -31,7 +31,7 @@
   "build": {
     "appId": "io.github.akreager.ShapeShell",
     "productName": "ShapeShell",
-    "copyright": "Copyright \u00a9 2026 Allen",
+    "copyright": "Copyright © 2026 akreager",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -86,7 +86,7 @@
     }
   },
   "author": {
-    "name": "Allen",
+    "name": "akreager",
     "email": "maintainer@shapeshell.invalid"
   },
   "desktopName": "io.github.akreager.ShapeShell.desktop",
