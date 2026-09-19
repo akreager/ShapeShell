@@ -118,9 +118,9 @@ A real fix for the runaway needs two changes together: `repeat-interval = 250` i
 
 ### Packaging (milestone 5)
 
-`npm run pack` builds an AppImage into `dist/` (`npm run pack:dir` for a fast unpacked build). `scripts/package.sh` builds the bridge first if `resources/bridge/` is missing, since it is gitignored and a clean checkout would otherwise silently ship a package with no SpaceMouse support.
+`npm run pack` builds the Flatpak into `dist/` (`npm run pack:dir` for a fast unpacked build). `scripts/package.sh` builds the bridge first if `resources/bridge/` is missing, since it is gitignored and a clean checkout would otherwise silently ship a package with no SpaceMouse support.
 
-Verified on the built AppImage (123MB): the bundled bridge is used, not the repo copy (`readlink /proc/<pid>/exe` resolved inside the AppImage), it binds 8181, the `.desktop` file is named `io.github.akreager.ShapeShell.desktop` with a matching `StartupWMClass`, and the icon ships.
+Verified on built packages: the bundled bridge is used, not the repo copy (`readlink /proc/<pid>/exe` resolved inside the package), it binds 8181, the `.desktop` file is named `io.github.akreager.ShapeShell.desktop` with a matching `StartupWMClass`, and the icon ships. The AppImage and `.deb` findings below come from before the Flatpak-only decision and are kept as the reason for it.
 
 `desktopName` is a **root-level** package.json field, not a `linux` option — `linux.syncDesktopName: true` reads it from there and names the `.desktop` file to match `app.setDesktopName()` in main.js, which is what links running windows to the entry and its icon. Without it electron-builder warns and window association breaks.
 
@@ -199,8 +199,8 @@ Reordered 2026-09-17: packaging moved ahead of the Stream Deck daemon. The daemo
 2. ~~**Bridge spawn**~~ — DONE. Built into `resources/bridge/` by `npm run fetch-bridge`, spawned and killed around the app lifecycle, supervised on unexpected exit. No loopback alias was needed.
 3. ~~**Loopback + cert automation**~~ — DONE, reduced to just `setCertificateVerifyProc` pinned to the bridge's own leaf; no loopback work was needed at all.
 4. ~~**Platform spoof**~~ — DONE by deletion. Onshape dropped its `navigator.platform` gate, so no CDP injection exists. Live 6-DOF motion confirmed driving the Onshape viewport.
-5. **Packaging** — AppImage first (simpler, no sandbox surprises), test on a clean VM; then Flatpak — watch `finish-args` (`--socket=wayland`, `--socket=fallback-x11`, `--device=dri`, `--share=network`). Two things are now easier than the spec assumed: there is no privileged first-run step to run inside the sandbox, and no loopback alias to make visible there. Still to check: whether the bridge can bind `127.51.68.120:8181` inside the Flatpak sandbox, and that `resources/bridge/` ships via `extraResources` (it is gitignored, so `npm run fetch-bridge` must run before a package build).
-6. **Polish** — custom icon, `.desktop` file with the correct `StartupWMClass` (must match `app.setDesktopName`).
+5. ~~**Packaging**~~ — DONE. Flatpak only; released as v0.1.0 on GitHub (2026-09-19). See [Packaging](#packaging-milestone-5).
+6. ~~**Polish**~~ — DONE. Original icon, `.desktop` entry whose `StartupWMClass` matches `app.setDesktopName`.
 7. **Stream Deck daemon** — separate repo/service; `python-elgato-streamdeck` → `ydotool`, a udev rule for non-root HID access, manual profile-switch shortcuts against the real Onshape shortcut map. Auto-switch-on-focus is a stretch goal. The Stream Deck MK.2 (`0fd9:0080`) is present on this machine.
 
 ## Milestone 1 results
@@ -258,13 +258,15 @@ Each was measured on this machine. `--use-gl=desktop`, `--use-gl=egl`, `--use-an
 - [x] Live 6-DOF motion drives the Onshape viewport — confirmed by `navigation active client=Onshape` plus puck-button `fit` events in bridge.log
 - [x] Cert trust is pinned, not merely scoped — a rogue TLS server on the same IP with a *valid* SAN for it is rejected, while the bridge is accepted and public HTTPS still verifies normally
 - [x] ~~Loopback alias survives a reboot~~ — moot; no alias is needed on Linux
-- [ ] AppImage runs on a clean VM with no dev toolchain installed
-- [ ] Flatpak sandbox: bridge can bind `127.51.68.120:8181` and Onshape can reach it
+- [x] ~~AppImage runs on a clean VM~~ — moot; AppImage is unsupported
+- [x] Flatpak sandbox: bridge binds `127.51.68.120:8181` and Onshape reaches it (200 from the page)
+- [ ] Flatpak on a non-NVIDIA GPU, a non-GNOME desktop, and a non-Ubuntu distro — untested
 - [ ] Stream Deck udev rule grants access without root
 - [x] ~~DevTools shortcut vs the CDP-attached spoof~~ — moot; there is no CDP debugger and no spoof
 
 ## Open risks
 
-- Onshape could change client detection at any time (undocumented integration). If it starts checking `navigator.userAgentData` in addition to `platform`, the spoof needs extending.
-- Flatpak network sandboxing of the loopback alias is unverified — `--share=network` typically shares the host netns, but confirm empirically.
-- `spacemouse_linux_ws` is new and largely self-verified by its author — budget time to debug it or fall back to the Python bridge.
+- Onshape could change its client at any time (undocumented integration): its UA classifier, or the `_3Dconnexion` connect path the bridge relies on.
+- `spacemouse_linux_ws` is young and largely verified by its own author; its behaviour is pinned to one commit by `scripts/fetch-bridge.sh`.
+- Only one machine has run it so far (Ubuntu 26.04, GNOME 50 Wayland, NVIDIA). Other GPUs, desktops and distros are the main unknown.
+- The NVIDIA Flatpak GL extension must match the host driver exactly; a driver update without the matching extension silently drops WebGL to software.
