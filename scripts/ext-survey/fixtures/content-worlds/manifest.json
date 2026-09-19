@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "ext-survey content-world fixture",
+  "version": "1.0.0",
+  "description": "Checks that Electron honours content-script worlds, include_globs and all_frames the way Onshape extensions use them.",
+  "content_scripts": [
+    {
+      "matches": ["https://*.onshape.com/*"],
+      "include_globs": ["https://cad.onshape.com/signin*"],
+      "all_frames": true,
+      "world": "ISOLATED",
+      "run_at": "document_idle",
+      "js": ["isolated.js"]
+    },
+    {
+      "matches": ["https://*.onshape.com/*"],
+      "include_globs": ["https://cad.onshape.com/signin*"],
+      "all_frames": true,
+      "world": "MAIN",
+      "run_at": "document_idle",
+      "js": ["main.js"]
+    },
+    {
+      "matches": ["https://*.onshape.com/*"],
+      "include_globs": ["https://cad.onshape.com/this-glob-never-matches*"],
+      "world": "ISOLATED",
+      "js": ["excluded.js"]
+    }
+  ]
+}

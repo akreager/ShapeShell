@@ -6,6 +6,8 @@ Full spec/handoff: [onshapeAppliance.md](onshapeAppliance.md). This file is the 
 
 **Status: milestones 1-5 complete. Flatpak is the only supported format.** Hardware WebGL verified, custom window chrome, and live 6-DOF SpaceMouse navigation driving the Onshape viewport — see [Milestone 1 results](#milestone-1-results) and [Bridge integration](#bridge-integration). Milestone 4 needed no work: Onshape dropped its platform sniff. **Next: the Stream Deck integration**, once the owner has the Stream Deck working on Linux independently.
 
+**Extension support is in progress on `feature/extensions`**: allowlisted Chrome extensions (Bitwarden first), a toolbar tray, and popups. The plan and all measured results live in [docs/extensions-plan.md](docs/extensions-plan.md); `npm run ext-survey` re-measures Electron's extension API gaps.
+
 **Naming (2026-09-19).** Renamed from "Onshape Appliance" to **ShapeShell**, app ID `io.github.akreager.ShapeShell`, ahead of a public release on GitHub (`akreager/ShapeShell`). The old name and Onshape's own logo as the icon were trademark risks and would be rejected by Flathub; `com.allen.*` also implied a domain the owner doesn't control. The app ID determines where user data lives (`~/.var/app/<id>/` in Flatpak, `~/.config/ShapeShell/` from source), so it must not change again after people install it. The icon is an original isometric cube with RGB faces (`build/icon.svg`, rasterised by `npm run icons`); it replaced Onshape's logo, which remains in this repo's earlier git history — one reason the public GitHub repo starts from a fresh single commit. The SVG carries an Anthropic-signed C2PA provenance manifest (no personal data); editing the SVG invalidates that signature.
 
 ## Locked decisions — do not re-litigate
@@ -32,7 +34,8 @@ ShapeShell/
 ├── resources/
 │   └── bridge/               # gitignored; built by scripts/fetch-bridge.sh:
 │                             #   spacemouse-bridge, LICENSE, LICENSE.gorilla-websocket, PINNED_COMMIT
-├── scripts/                  # env-repair, run, package, fetch-bridge, gpu-check, fix-sandbox
+├── scripts/                  # env-repair, run, package, fetch-bridge, gpu-check, fix-sandbox,
+│                             #   ext-survey (+ ext-survey/: shim, polyfill spike, fixtures)
 ├── build/                    # icon.svg, icon.png, icons/NxN.png
 ├── docs/evidence/            # milestone 1 GPU results, kept as a record
 └── package.json              # electron-builder config; the Flatpak manifest is generated from its `build.flatpak` block

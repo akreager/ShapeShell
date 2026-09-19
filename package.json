@@ -14,6 +14,7 @@
     "start": "bash scripts/run.sh .",
     "start:xwayland": "bash scripts/run.sh . --ozone-platform=x11",
     "gpu-check": "bash scripts/gpu-check.sh",
+    "ext-survey": "bash scripts/ext-survey.sh",
     "fix-sandbox": "bash scripts/fix-sandbox.sh",
     "fetch-bridge": "bash scripts/fetch-bridge.sh",
     "calibrate": "resources/bridge/spacemouse-bridge -calibrate",
