@@ -23,6 +23,8 @@ fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(OUT, { recursive: true });
 app.setPath('userData', path.join(OUT, 'profile'));
 process.env.SHAPESHELL_DEV_EXTENSIONS = dirs.join(path.delimiter);
+// Stops src/main.js starting the app itself; this file builds the window instead.
+process.env.SHAPESHELL_TEST_HARNESS = '1';
 
 const { createShellWindow, registerIpc, PARTITION } = require('../src/main');
 const extensions = require('../src/extensions/manager');

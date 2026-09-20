@@ -427,8 +427,12 @@ function main() {
   });
 }
 
-// Only when Electron runs this file as its entry point, so tests (scripts/smoke-extensions.js)
-// can build a real window without the app starting itself.
-if (require.main === module) main();
+// Start unless a test harness is driving this module itself (scripts/smoke-extensions.js),
+// which builds its own window from the exports below.
+//
+// Do NOT write this as `require.main === module`: in Electron's main process require.main is
+// Electron's own internal module, never the entry file, so that check is always false and
+// the app would start with no window and no error.
+if (process.env.SHAPESHELL_TEST_HARNESS !== '1') main();
 
 module.exports = { createShellWindow, registerIpc, PARTITION, TOOLBAR_HEIGHT, START_URL };

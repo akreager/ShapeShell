@@ -101,7 +101,8 @@ Measured behaviour worth keeping:
 - **`enablePreferredSizeMode` gives Chrome's size-to-content popup** through `preferred-size-changed`.
 - **Do not refocus the content view after opening a popup**: the popup closes on blur, so refocusing would shut it instantly.
 - **Clicking the icon of an open popup arrives after the popup has already blurred shut**, so a toggle needs a short suppression window or the popup flickers and reopens.
-- **`src/main.js` now exports `createShellWindow` and `registerIpc` and only self-starts when it is Electron's entry point**, which is what lets the smoke test drive a real window.
+- **`require.main === module` is always false in Electron's main process.** `require.main` is Electron's own internal module, never the entry file. Guarding startup with it meant `npm start` ran, opened no window, and printed no error. `src/main.js` exports `createShellWindow` and `registerIpc` for the smoke test and starts unless `SHAPESHELL_TEST_HARNESS=1` says a harness is driving it.
+- **`npm run smoke-launch` covers the entry path** that the extension smoke test cannot: it starts the app the way `npm start` does and asks Chromium over its debugger port what it is rendering, expecting the toolbar, the popover and Onshape. It has a negative control (`SHAPESHELL_TEST_HARNESS=1`), it picks a fresh port per run so a leftover instance cannot answer for it, and it launches the Electron binary directly, since killing `npx electron` orphans the real process.
 
 Known gaps, deliberately left for later phases:
 
