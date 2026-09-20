@@ -472,6 +472,13 @@ if (fs.existsSync(bitwarden) && fs.existsSync(drawingComfort)) {
     assert.equal(install.verifyInstalled(dir, {}).ready.length, 1);
   });
 
+  // What a user actually hits: they point at the folder HOLDING the extensions rather than
+  // at one of them. Reported as a hash mismatch, that reads like the allowlist rejecting a
+  // good build.
+  refuses('a folder containing extensions, rather than an extension', () => {
+    install.install(path.dirname(drawingComfort), path.join(TMP, 'install-parent'), {});
+  }, /no manifest\.json/i);
+
   refuses('an unpacked folder whose contents were modified', () => {
     const copy = path.join(TMP, 'drawing-modified');
     fs.cpSync(drawingComfort, copy, { recursive: true, filter: s => path.basename(s) !== '.git' });

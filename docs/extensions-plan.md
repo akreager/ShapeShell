@@ -42,6 +42,7 @@ Each phase ends with something runnable. None of them touch `main` until the fea
 3. ~~**Install pipeline and allowlist.**~~ DONE; results below. The menu can install; the management UI is phase 4.
 4. **Management UI.** List, pin, remove, and a clear message when an install is refused.
 5. **Flatpak.** Portal chooser, persistence under `~/.var/app/…`, and no new finish-args.
+6. **Getting the package in the first place** — see [Installing without a browser](#installing-without-a-browser). Deferred to a later release (2026-09-20).
 
 Regression checks after every phase: SpaceMouse still drives the viewport, the bridge cert is still pinned (rogue-server test), `Seccomp: 2` on the renderers, frame time unchanged, and extension-opened windows go through `createWindow` or are blocked.
 
@@ -200,7 +201,60 @@ Decisions made while building it:
 
 Verified beyond the unit tests: the real Bitwarden CRX installs against the shipped allowlist and derives its true Web Store id (`nngceckbapebfimnlniiiahkandclblb`), the real Drawing Comfort folder installs identified purely by its contents, and changing one byte of either makes it refuse. The smoke test covers the whole path in a running window — an unlisted extension refused, an allowlisted one installed, loaded and drawn in the tray.
 
-The hamburger menu has **Install Extension…**, which opens a file chooser (the xdg-desktop-portal one under Flatpak, so no home access is needed) and reports refusals with their reasons.
+The hamburger menu has **Install Extension…** for a `.crx` and **Install Unpacked Folder…** for a folder, each opening a file chooser (the xdg-desktop-portal one under Flatpak, so no home access is needed) and reporting refusals with their reasons.
+
+These are two menu items because they have to be. A single dialog asking for both `openFile`
+and `openDirectory` becomes a **folder-only** chooser on Linux and Windows, which is how it
+shipped in phase 3: the `.crx` could not be selected, and "Open" returned whichever folder the
+chooser was showing. The refusal then named the hash of that folder, so a correct pipeline
+refusing a bad path read exactly like the allowlist rejecting a good build. `npm run
+smoke-extensions` now asserts neither dialog asks for both.
+
+## Installing without a browser
+
+Deferred to a later release; raised 2026-09-20 when the owner found they had no way to obtain
+a `.crx` at all, having no Chrome installed. Today the only route is `curl` against Google's
+update endpoint, which is what `scripts/ext-survey.sh` does — a developer step, not a feature.
+Requiring users to install Chrome in order to de-Chrome their Onshape session is absurd.
+
+**The app does not need a URL from the user.** The allowlist already names every installable
+extension and pins its bytes, so ShapeShell knows the ids. The menu can simply offer what is
+on the list and fetch it:
+
+```
+https://clients2.google.com/service/update2/crx?response=redirect
+  &prodversion=<chromium version>&acceptformat=crx3&x=id%3D<id>%26uc
+```
+
+A pasted Web Store URL would be a second way in (take the 32-character id out of the path),
+but it is the weaker entry point: it invites users to paste a URL for something not on the
+list, only to be refused.
+
+**The download needs no trust of its own.** It feeds the existing pipeline unchanged, and the
+allowlist check is the gate: a wrong, tampered or substituted file fails before anything is
+unpacked. Fetching over the network is therefore a convenience, not a new trust decision.
+Implementation notes: fetch with `net.request` in the **default** session, never
+`persist:onshape`, so no Onshape cookies are attached; Bitwarden is 23MB, so it needs a size
+ceiling and some progress feedback; Flatpak already has network access, so no new finish-args.
+
+**The open problem is version skew**, and it is the reason this is not simply phase 4 work.
+The store serves the *newest* build, while `crxSha256` pins one reviewed build, so the moment
+Bitwarden ships an update the download stops matching and every user is stuck until ShapeShell
+cuts a release. Keeping a hard pin and a live download together is not workable.
+
+The way out is to treat signed and unsigned extensions differently, because they offer
+different evidence:
+
+- **A store CRX is signed.** Verifying the signature against the allowlisted id proves the
+  publisher who owns that id produced this file — the same guarantee Chrome itself gives. Pair
+  that with `minVersion` and the manifest policy check, and a fresh build can be accepted
+  without a byte pin. What is lost is "a human looked at these exact bytes"; what is kept is
+  authorship, a version floor, and a permission ceiling that a surprising update would trip.
+- **An unpacked folder is not signed.** Drawing Comfort has no key and no id, so its tree hash
+  is the only evidence there is. It stays pinned, with no live-download path.
+
+That split is the recommendation, but it is a real loosening of the current model and should
+be decided deliberately rather than slipped in with the download button.
 
 ## Decisions
 

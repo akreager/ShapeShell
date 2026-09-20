@@ -307,16 +307,29 @@ function createShellWindow({ adoptedContents = null, url = START_URL, persistBou
 
 // The only way to add an extension. Whatever is chosen still has to pass the allowlist in
 // src/extensions/allowlist.json — being picked here grants nothing.
-async function installExtension(shellRef) {
+// A packaged .crx and an unpacked folder need SEPARATE menu items, because on Linux and
+// Windows one dialog cannot offer both: passing ['openFile','openDirectory'] together
+// silently yields a folder-ONLY chooser, so the .crx is unselectable and "Open" returns
+// whatever folder happened to be showing. That looked like the allowlist rejecting a valid
+// build. Keep these two paths apart.
+function installDialogOptions(folder) {
+  return folder ? {
+    title: 'Install unpacked extension',
+    message: 'Choose the folder that contains manifest.json',
+    properties: ['openDirectory', 'dontAddToRecent'],
+  } : {
+    title: 'Install extension',
+    message: 'Choose a .crx file',
+    properties: ['openFile', 'dontAddToRecent'],
+    filters: [{ name: 'Chrome extension', extensions: ['crx'] }, { name: 'All files', extensions: ['*'] }],
+  };
+}
+
+async function installExtension(shellRef, { folder = false } = {}) {
   closeMenu(shellRef);
   // In the Flatpak this goes through the xdg-desktop-portal file chooser, which is why the
   // app needs no home-directory access to install an extension.
-  const { canceled, filePaths } = await dialog.showOpenDialog(shellRef.win, {
-    title: 'Install extension',
-    message: 'Choose a .crx file, or an unpacked extension folder',
-    properties: ['openFile', 'openDirectory', 'dontAddToRecent'],
-    filters: [{ name: 'Chrome extension', extensions: ['crx'] }],
-  });
+  const { canceled, filePaths } = await dialog.showOpenDialog(shellRef.win, installDialogOptions(folder));
   if (canceled || filePaths.length === 0) return;
 
   try {
@@ -416,6 +429,7 @@ function registerIpc() {
       case 'home': contents.loadURL(DOCUMENTS_URL); break;
       case 'newWindow': createShellWindow().win.show(); break;
       case 'installExtension': installExtension(shellRef); return;
+      case 'installExtensionFolder': installExtension(shellRef, { folder: true }); return;
       case 'quit': app.quit(); return;
       default: return;
     }
@@ -473,4 +487,4 @@ function main() {
 // the app would start with no window and no error.
 if (process.env.SHAPESHELL_TEST_HARNESS !== '1') main();
 
-module.exports = { createShellWindow, registerIpc, PARTITION, TOOLBAR_HEIGHT, START_URL };
+module.exports = { createShellWindow, registerIpc, installDialogOptions, PARTITION, TOOLBAR_HEIGHT, START_URL };

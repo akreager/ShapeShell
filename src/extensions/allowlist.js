@@ -39,16 +39,25 @@ function sha256(buf) {
   return crypto.createHash('sha256').update(buf).digest('hex');
 }
 
-function listFilesRecursively(dir, base = dir) {
-  const out = [];
+// The same ceilings the zip reader applies, so an unpacked folder cannot cost more than a
+// packaged one. A folder is chosen by hand, so this also bounds the damage of picking the
+// wrong one: it stops walking instead of reading an entire home directory.
+const TREE_LIMITS = { maxFiles: 5000, maxTotalBytes: 400 * 1024 * 1024 };
+
+function listFilesRecursively(dir, base = dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === '.git') continue;
     const full = path.join(dir, entry.name);
     // A symlink inside an extension tree would make the hash meaningless, since it could
     // point anywhere and change underneath us.
     if (entry.isSymbolicLink()) throw new Error(`Symlink in extension tree: ${path.relative(base, full)}`);
-    if (entry.isDirectory()) out.push(...listFilesRecursively(full, base));
-    else if (entry.isFile()) out.push(path.relative(base, full));
+    if (entry.isDirectory()) listFilesRecursively(full, base, out);
+    else if (entry.isFile()) {
+      out.push(path.relative(base, full));
+      if (out.length > TREE_LIMITS.maxFiles) {
+        throw new Error(`Too many files to be an extension (more than ${TREE_LIMITS.maxFiles})`);
+      }
+    }
   }
   return out;
 }
@@ -60,10 +69,14 @@ function listFilesRecursively(dir, base = dir) {
 function hashTree(dir) {
   const files = listFilesRecursively(dir).sort();
   const digest = crypto.createHash('sha256');
+  let total = 0;
   for (const rel of files) {
+    const data = fs.readFileSync(path.join(dir, rel));
+    total += data.length;
+    if (total > TREE_LIMITS.maxTotalBytes) throw new Error('These files are too large to be an extension');
     digest.update(rel.split(path.sep).join('/'));
     digest.update('\0');
-    digest.update(sha256(fs.readFileSync(path.join(dir, rel))));
+    digest.update(sha256(data));
     digest.update('\n');
   }
   return digest.digest('hex');

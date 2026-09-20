@@ -67,6 +67,13 @@ function install(source, extensionsDir, options = {}) {
   let install;
 
   if (stats.isDirectory()) {
+    // Checked before hashing: a folder with no manifest.json is almost always the PARENT of
+    // the extension rather than a build we have not reviewed, and saying so is more use than
+    // a hash of whatever else was in there. It also keeps hashTree from reading every file
+    // under a home directory chosen by mistake.
+    if (!fs.existsSync(path.join(source, 'manifest.json'))) {
+      throw new RefusedError(`"${path.basename(source)}" is not an extension: it contains no manifest.json. Choose the folder that has manifest.json directly inside it.`);
+    }
     // An unpacked tree carries no key, so there is no id to check and the folder name proves
     // nothing — a clone can be called anything. Its contents are its identity: the hash has
     // to match a reviewed build, and the entry it matches supplies the name it installs

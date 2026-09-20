@@ -30,7 +30,7 @@ process.env.SHAPESHELL_DEV_EXTENSIONS = dirs.join(path.delimiter);
 // Stops src/main.js starting the app itself; this file builds the window instead.
 process.env.SHAPESHELL_TEST_HARNESS = '1';
 
-const { createShellWindow, registerIpc, PARTITION } = require('../src/main');
+const { createShellWindow, registerIpc, installDialogOptions, PARTITION } = require('../src/main');
 const extensions = require('../src/extensions/manager');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -291,6 +291,22 @@ app.whenReady().then(async () => {
     results.push({
       check: 'opening an action popup hides the main menu',
       value: { popupOpen: shell.extPopup.isOpen, menuVisible: shell.popoverView.getVisible() },
+    });
+  }
+
+  // A dialog asking for both openFile and openDirectory becomes folder-only on Linux, which
+  // made the .crx unselectable and silently returned the folder the chooser was showing.
+  // The two routes must stay separate, so assert they never ask for both.
+  step('checking the install dialogs');
+  {
+    const file = installDialogOptions(false).properties;
+    const folderProps = installDialogOptions(true).properties;
+    const mixes = p => p.includes('openFile') && p.includes('openDirectory');
+    results.push({
+      check: 'the .crx and folder install dialogs each ask for exactly one kind',
+      value: mixes(file) || mixes(folderProps)
+        ? `A DIALOG ASKS FOR BOTH: file=${file}, folder=${folderProps}`
+        : `file=${file.join('+')}, folder=${folderProps.join('+')}`,
     });
   }
 
