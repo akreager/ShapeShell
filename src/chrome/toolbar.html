@@ -55,14 +55,39 @@
   /* 16px box for a 16-unit viewBox, so strokes land on the pixel grid. A 2px stroke
      centred on an even coordinate spans whole pixels; 15px/1.7 blurred it. */
   button svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2; fill: none; shape-rendering: crispEdges; }
-  /* Balances the hamburger so the title stays optically centred. */
-  .spacer { width: 32px; flex: none; }
+  /* Balances the tray and hamburger so the title stays optically centred; its width is
+     kept in sync with the right-hand controls in script below. */
+  .spacer { flex: none; width: 32px; }
+  /* Extension tray, left of the hamburger. */
+  .tray { display: flex; align-items: center; }
+  .tray button { position: relative; width: 26px; }
+  .tray img { width: 16px; height: 16px; object-fit: contain; }
+  .tray button.disabled img { opacity: .4; }
+  /* Fallback mark when an extension ships no readable icon. */
+  .tray .letter {
+    display: flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; border-radius: 3px;
+    background: #4a4a4f; font-size: 10px; text-transform: uppercase;
+  }
+  .badge {
+    position: absolute;
+    right: 1px;
+    bottom: 1px;
+    min-width: 12px;
+    padding: 0 2px;
+    border-radius: 6px;
+    color: #fff;
+    font-size: 8px;
+    line-height: 10px;
+    text-align: center;
+  }
 </style>
 </head>
 <body>
 <div class="bar">
-  <div class="spacer"></div>
+  <div class="spacer" id="spacer"></div>
   <div class="title" id="title">Onshape</div>
+  <div class="tray" id="tray"></div>
   <button id="menu" title="Main menu">
     <svg viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
   </button>
@@ -75,6 +100,45 @@
 
   window.shellApi.onState((s) => {
     document.getElementById('title').textContent = s.title || 'Onshape';
+  });
+
+  const tray = document.getElementById('tray');
+
+  window.shellApi.onExtensions((list) => {
+    tray.replaceChildren();
+    for (const ext of list) {
+      const button = document.createElement('button');
+      button.title = ext.title || ext.name;
+      button.className = ext.enabled ? '' : 'disabled';
+
+      if (ext.icon) {
+        const img = document.createElement('img');
+        img.src = ext.icon;
+        img.alt = '';
+        button.append(img);
+      } else {
+        const letter = document.createElement('span');
+        letter.className = 'letter';
+        letter.textContent = (ext.name || '?').trim().charAt(0);
+        button.append(letter);
+      }
+
+      if (ext.badgeText) {
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = ext.badgeText;
+        badge.style.background = ext.badgeColor || '#666';
+        button.append(badge);
+      }
+
+      button.addEventListener('click', (e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        window.shellApi.openExtension(ext.id, Math.round(r.right));
+      });
+      tray.append(button);
+    }
+    // Keep the title optically centred as icons come and go.
+    document.getElementById('spacer').style.width = `${32 + tray.offsetWidth}px`;
   });
 </script>
 </body>

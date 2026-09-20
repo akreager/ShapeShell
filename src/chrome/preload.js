@@ -10,6 +10,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('shellApi', {
   openMenu: (x, y) => ipcRenderer.send('shell:open-menu', { x, y }),
   onState: (cb) => ipcRenderer.on('shell:state', (_event, state) => cb(state)),
+  // Extension tray. `x` is the right edge of the clicked icon, so the popup hangs from it.
+  openExtension: (id, x) => ipcRenderer.send('shell:open-extension', { id, x }),
+  onExtensions: (cb) => ipcRenderer.on('shell:extensions', (_event, list) => cb(list)),
 });
 
 // Popover view.

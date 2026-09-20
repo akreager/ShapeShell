@@ -4,6 +4,8 @@ const { app, BaseWindow, WebContentsView, Menu, session, shell, ipcMain } = requ
 const path = require('node:path');
 const windowState = require('./window-state');
 const bridge = require('./bridge');
+const extensions = require('./extensions/manager');
+const { ExtensionPopup } = require('./extensions/popup');
 
 // ---------------------------------------------------------------------------
 // Chromium switches: deliberately NONE.
@@ -153,6 +155,15 @@ function createShellWindow({ adoptedContents = null, url = START_URL, persistBou
       });
   contentView.setBackgroundColor(WINDOW_BG);
 
+  // The action popup creates and destroys its own view on top of everything else.
+  const extPopup = new ExtensionPopup({
+    win,
+    partition: PARTITION,
+    toolbarHeight: TOOLBAR_HEIGHT,
+    cornerRadius: CORNER_RADIUS,
+    onClosed: () => { if (!contentView.webContents.isDestroyed()) contentView.webContents.focus(); },
+  });
+
   const popoverView = new WebContentsView({ webPreferences: chromeUi });
   popoverView.setBackgroundColor('#00000000');
   popoverView.setVisible(false);
@@ -178,6 +189,7 @@ function createShellWindow({ adoptedContents = null, url = START_URL, persistBou
     chromeView.setBounds({ x: 0, y: 0, width: w, height: TOOLBAR_HEIGHT + 2 * CORNER_RADIUS });
     contentView.setBounds({ x: 0, y: TOOLBAR_HEIGHT, width: w, height: Math.max(0, h - TOOLBAR_HEIGHT) });
     popoverView.setBounds({ x: 0, y: 0, width: w, height: h });
+    extPopup.layout();
   };
   win.contentView.on('bounds-changed', layout);
   win.on('resize', layout);
@@ -252,7 +264,13 @@ function createShellWindow({ adoptedContents = null, url = START_URL, persistBou
     }
   });
 
-  const shellRef = { win, chromeView, contentView, popoverView };
+  const pushExtensions = () => {
+    if (chromeView.webContents.isDestroyed()) return;
+    chromeView.webContents.send('shell:extensions', extensions.listActions());
+  };
+  const stopWatchingExtensions = extensions.onChange(pushExtensions);
+
+  const shellRef = { win, chromeView, contentView, popoverView, extPopup };
   shells.set(chromeView.webContents.id, shellRef);
   shells.set(popoverView.webContents.id, shellRef);
 
@@ -262,6 +280,8 @@ function createShellWindow({ adoptedContents = null, url = START_URL, persistBou
   }
 
   win.on('closed', () => {
+    stopWatchingExtensions();
+    extPopup.destroy();
     shells.delete(chromeView.webContents.id);
     shells.delete(popoverView.webContents.id);
   });
@@ -270,6 +290,7 @@ function createShellWindow({ adoptedContents = null, url = START_URL, persistBou
   chromeView.webContents.once('did-finish-load', () => {
     layout();
     pushState();
+    pushExtensions();
   });
 
   chromeView.webContents.loadFile(path.join(__dirname, 'chrome', 'toolbar.html'));
@@ -314,6 +335,7 @@ function registerIpc() {
     if (!shellRef) return;
     const contents = shellRef.contentView.webContents;
 
+    shellRef.extPopup.close();
     shellRef.popoverView.setVisible(true);
     shellRef.popoverView.webContents.focus();
     shellRef.popoverView.webContents.send('menu:open', {
@@ -322,6 +344,22 @@ function registerIpc() {
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward(),
     });
+  });
+
+  // Tray click: open the extension's popup, or fire chrome.action.onClicked when it has
+  // none. `x` is the right edge of the clicked icon, so the popup hangs from it.
+  ipcMain.on('shell:open-extension', (event, { id, x }) => {
+    const shellRef = shellFor(event);
+    if (!shellRef || typeof id !== 'string') return;
+    shellRef.popoverView.setVisible(false);
+    if (extensions.popupUrl(id)) {
+      // No refocus here: the popup takes key focus, and its own blur handler closes it.
+      // Focus returns to the content view when the popup closes.
+      shellRef.extPopup.toggle(id, Number.isFinite(x) ? x : 0);
+      return;
+    }
+    extensions.click(id);
+    refocusContent(shellRef);
   });
 
   ipcMain.on('menu:close', (event) => {
@@ -367,12 +405,15 @@ function main() {
   app.on('before-quit', bridge.stop);
   app.on('will-quit', bridge.stop);
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     const ses = session.fromPartition(PARTITION);
     applyPermissionPolicy(ses);
     bridge.installCertificateTrust(ses);
     bridge.start();
     registerIpc();
+    // Before any window exists: extensions must be loaded before the first navigation, and
+    // Electron does not remember them across launches.
+    await extensions.init(ses);
 
     createShellWindow({ persistBounds: true }).win.show();
 
@@ -386,4 +427,8 @@ function main() {
   });
 }
 
-main();
+// Only when Electron runs this file as its entry point, so tests (scripts/smoke-extensions.js)
+// can build a real window without the app starting itself.
+if (require.main === module) main();
+
+module.exports = { createShellWindow, registerIpc, PARTITION, TOOLBAR_HEIGHT, START_URL };

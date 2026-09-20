@@ -1,6 +1,6 @@
 # Extension support: plan
 
-Branch: `feature/extensions`. Status: phase 0 (API survey) done; see [Phase 0 results](#phase-0-results). Nothing user-facing is built yet. Replaces the design-only handoff from 2026-09-19. Where the two disagree, this file wins; `CLAUDE.md` wins over both.
+Branch: `feature/extensions`. Status: phases 0 and 1 done — see [Phase 0 results](#phase-0-results) and [Phase 1 results](#phase-1-results). The tray and popups work; there is no install path yet, so extensions load only from `SHAPESHELL_DEV_EXTENSIONS` when running from source. Replaces the design-only handoff from 2026-09-19. Where the two disagree, this file wins; `CLAUDE.md` wins over both.
 
 ## Goal
 
@@ -37,7 +37,7 @@ Let the user install Chrome extensions that are on an allowlist shipped with the
 Each phase ends with something runnable. None of them touch `main` until the feature is done.
 
 0. ~~**API survey.**~~ DONE. `npm run ext-survey`; results below. It ran in a throwaway profile rather than `persist:onshape`, so the survey can never disturb a real sign-in.
-1. **Tray and popup host**, tested with Drawing Comfort, plus a dev-only loader (unpacked extensions from a hard-coded path, `!app.isPackaged` only) so both extensions can be tried in the real window. Check the drawing-editor content scripts and `all_frames` on the `production-drawing-*` iframe, which needs a signed-in session. Route `chrome.action` calls (`setBadgeText`, `setIcon`, `setPopup`, `onClicked`) to the tray; Electron defines them, but nothing draws them.
+1. ~~**Tray and popup host.**~~ DONE; results below. Still outstanding from this phase, because it needs a signed-in session: the drawing-editor content scripts and `all_frames` on the `production-drawing-*` iframe.
 2. **Bitwarden compatibility.** Turn the phase-0 polyfill spike into real implementations, then test login, unlock, autofill on the Onshape sign-in page, and autofill in a second window. See [what phase 2 must implement](#what-phase-2-must-implement).
 3. **Install pipeline and allowlist.** CRX3 parse and signature check, unpacked tree hash, manifest subset checks, safe unpacking (zip-slip, symlinks, size caps), and a re-check on every launch.
 4. **Management UI.** List, pin, remove, and a clear message when an install is refused.
@@ -79,6 +79,36 @@ These are ordered by what a logged-in Bitwarden will actually exercise. The surv
 - **`permissions`.** `contains` and `getAll` report the manifest's grants. `request` always refuses, so optional `nativeMessaging` and `privacy` stay off.
 - **`commands`.** `getAll` plus `onCommand`. Keyboard shortcuts such as `Ctrl+Shift+L` (autofill) would need a deliberate choice, since every plain shortcut belongs to Onshape.
 - **Inert:** `contextMenus` (no right-click menu yet) and `sidePanel`.
+
+## Phase 1 results
+
+Built 2026-09-20. `npm run smoke-extensions` is the regression test: it builds a real ShapeShell window in its own profile, loads unpacked extensions, clicks each tray icon, and screenshots the toolbar and popups into `dist/smoke-extensions/`. With no arguments it runs `scripts/fixtures/action-probe`, a fixture whose whole job is to exercise badge, title and click routing.
+
+What exists now:
+
+- **`src/extensions/manager.js`** loads extensions, holds each one's action state, and turns manifest icons into data URLs for the toolbar. Loading is dev-only (`SHAPESHELL_DEV_EXTENSIONS`, ignored when packaged) until phase 3.
+- **`src/extensions/preload.js`** runs inside extension contexts, reports `chrome.action` calls to the manager, and supplies the namespaces Electron lacks. It is the phase-0 spike, now permanent.
+- **`src/extensions/popup.js`** is one popup host per window: it sizes to content like Chrome, hangs from the right edge of its tray icon, clamps inside the window, and closes on blur or Escape.
+- **The toolbar tray** sits left of the hamburger, drawing each action's icon, title and badge, with a lettered placeholder when an extension has no readable icon.
+
+Verified in one run: both popups open with their real content (Drawing Comfort 400×569, Bitwarden 480×600), Escape closes them, a window resize keeps the popup inside the window, the main menu and an action popup never coexist, and the fixture's badge goes `7` → `OK` when its icon is clicked, proving `chrome.action.onClicked` reaches the background worker.
+
+Measured behaviour worth keeping:
+
+- **Electron defines all of `chrome.action` but draws nothing and never fires `onClicked`.** The preload replaces `onClicked` outright, and the tray is what dispatches it. Calls are still forwarded to Electron's own implementation so `getBadgeText` and friends stay consistent.
+- **A service worker's IPC is reachable only per worker**, through `ServiceWorkerMain.ipc` after `running-status-changed`. There is no `ipcMain` route for them.
+- **Extension load warnings arrive as Node `process.on('warning')` events** named `ExtensionLoadWarning`, not on any Electron API.
+- **`enablePreferredSizeMode` gives Chrome's size-to-content popup** through `preferred-size-changed`.
+- **Do not refocus the content view after opening a popup**: the popup closes on blur, so refocusing would shut it instantly.
+- **Clicking the icon of an open popup arrives after the popup has already blurred shut**, so a toggle needs a short suppression window or the popup flickers and reopens.
+- **`src/main.js` now exports `createShellWindow` and `registerIpc` and only self-starts when it is Electron's entry point**, which is what lets the smoke test drive a real window.
+
+Known gaps, deliberately left for later phases:
+
+- `chrome.action.onClicked` passes no tab argument, because `tabs.query` is not implemented until phase 2.
+- `setIcon` accepts a path, not `imageData`.
+- Every loaded extension appears in the tray; pin and unpin are phase 4.
+- A popup's preferred size includes its scrollbar, so a scrolling popup is a few pixels wider than in Chrome.
 
 ## Decisions
 

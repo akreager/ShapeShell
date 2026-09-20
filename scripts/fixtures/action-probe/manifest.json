@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "ShapeShell action probe",
+  "version": "1.0.0",
+  "description": "Fixture: exercises chrome.action badge/title/icon updates and onClicked, which Electron defines but never draws or fires.",
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Action probe" }
+}
