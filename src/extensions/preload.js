@@ -147,6 +147,10 @@ contextBridge.executeInMainWorld({
       replace(chrome.tabs, 'update', call('tabs.update'));
       define(chrome.tabs, 'getCurrent', call('tabs.getCurrent'));
       define(chrome.tabs, 'create', call('tabs.create'));
+      // Electron defines these events but never fires them, so ours replace them outright.
+      for (const name of ['onUpdated', 'onActivated', 'onCreated', 'onRemoved', 'onReplaced']) {
+        replace(chrome.tabs, name, event(`tabs.${name}`));
+      }
       define(chrome.tabs, 'TAB_ID_NONE', -1);
       define(chrome.tabs, 'TAB_INDEX_NONE', -1);
     }

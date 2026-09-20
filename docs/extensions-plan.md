@@ -145,7 +145,15 @@ Measured behaviour worth keeping:
 - **`listActions()` builds fresh objects on every call**, so `indexOf` against a later call is always `-1`. The smoke test finds tray buttons by title.
 - **A service worker's startup probe runs before the window has finished loading**, so anything asking "what is the user looking at?" at that moment sees an empty url and no frames. Real extensions re-query on events; the fixture re-probes on demand.
 
-Still to confirm, and it needs a real vault: login, unlock, autofill on the Onshape sign-in page, and the popped-out vault window.
+Confirmed against a real vault on 2026-09-20: **login, 2FA, vault unlock and autofill on the Onshape sign-in page all work.** Onshape's sign-in reveals its password field only after the email step, so the extension has to be clicked a second time to fill it.
+
+Found while following that up:
+
+- **Electron defines `chrome.tabs.onUpdated`, `onActivated`, `onCreated`, `onRemoved` and `onReplaced` but never fires them.** An extension therefore never learns the page changed, which is how Bitwarden decides to refresh its icon and autofill state. Ours replace them and are fed from the window: load and navigation state, title changes and audio for `onUpdated`, window focus for `onActivated` (one tab per window means focusing a window is activating its tab), and window open/close for the rest. `windows.onCreated`, `onRemoved` and `onFocusChanged` come from the same place.
+- **`setIcon({path: {...}})` does reach the tray**, verified by a fixture that swaps icons on click — this is the call Bitwarden makes when the vault locks or unlocks. It ignores `tabId`, which is harmless when a window holds one tab.
+- **`Error: The account switch process did not complete in a reasonable amount of time.`** appears once at startup. It is Bitwarden's own 1-second timeout waiting for its account state to settle, not a missing API, and the vault works regardless. Watch it; do not chase it unless something actually misbehaves.
+
+Still open: the inline autofill menu (the small icon Chrome shows inside a login field) does not appear. Bitwarden injects it as iframes from `web_accessible_resources` declared with `use_dynamic_url: true`, which is the first thing to check. Not required — the toolbar button fills correctly — so it is worth a diagnostic probe before any work.
 
 ## Decisions
 

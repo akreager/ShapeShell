@@ -369,9 +369,15 @@ function webNavigationGetFrame(details = {}) {
   return frames.find(f => f.frameId === (details.frameId ?? 0)) || null;
 }
 
+function focusedWindowExists() {
+  return liveWindows().some(s => s.win.isFocused());
+}
+
 module.exports = {
   WINDOW_ID_CURRENT,
   WINDOW_ID_NONE,
+  focusedWindowExists,
+  windowOf,
   registerWindow,
   unregisterWindow,
   liveWindows,

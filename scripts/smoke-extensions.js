@@ -128,19 +128,27 @@ app.whenReady().then(async () => {
   // nothing, so our preload reports each call to the manager.
   const probe = extensions.listActions().find(a => a.name === 'ShapeShell action probe');
   if (probe) {
-    const beforeClick = await limit(shell.chromeView.webContents.executeJavaScript(`
+    // The icon's data URL comes along too: Bitwarden swaps its icon when the vault locks or
+    // unlocks, and the tray has to follow.
+    const readProbe = `
       (() => { const b = [...document.querySelectorAll('#tray button')].find(b => b.title.startsWith('Action probe'));
-        return b ? { title: b.title, badge: b.querySelector('.badge')?.textContent || '' } : null; })()`), 5000, 'timed out');
+        return b ? { title: b.title, badge: b.querySelector('.badge')?.textContent || '',
+          icon: (b.querySelector('img')?.src || 'none').slice(-24) } : null; })()`;
+    const beforeClick = await limit(shell.chromeView.webContents.executeJavaScript(readProbe), 5000, 'timed out');
     results.push({ check: 'badge and title set from the background worker', value: beforeClick });
 
     step('clicking the popup-less action (expects chrome.action.onClicked)');
     await limit(shell.chromeView.webContents.executeJavaScript(`
       [...document.querySelectorAll('#tray button')].find(b => b.title.startsWith('Action probe')).click()`), 5000, 'timed out');
     await sleep(2000);
-    const afterClick = await limit(shell.chromeView.webContents.executeJavaScript(`
-      (() => { const b = [...document.querySelectorAll('#tray button')].find(b => b.title.startsWith('Action probe'));
-        return b ? { title: b.title, badge: b.querySelector('.badge')?.textContent || '' } : null; })()`), 5000, 'timed out');
+    const afterClick = await limit(shell.chromeView.webContents.executeJavaScript(readProbe), 5000, 'timed out');
     results.push({ check: 'onClicked reached the worker (badge should read OK)', value: afterClick });
+    results.push({
+      check: 'setIcon({path: {...}}) changed the tray icon',
+      value: beforeClick?.icon && afterClick?.icon
+        ? (beforeClick.icon !== afterClick.icon ? 'icon changed' : `icon unchanged (${afterClick.icon})`)
+        : 'no icon to compare',
+    });
     results.push({ check: 'tray screenshot after the click', value: await shot(shell.chromeView, 'toolbar-after-click') });
     results.push({ check: 'no popup opened for a popup-less action', value: !shell.extPopup.isOpen });
   }
@@ -180,6 +188,8 @@ app.whenReady().then(async () => {
     results.push({ check: 'worker: webNavigation.getAllFrames sees the page and its iframe', value: frames.map(f => ({ frameId: f.frameId, parentFrameId: f.parentFrameId, url: String(f.url).split('/').pop() })) });
     results.push({ check: 'worker: webNavigation.getFrame(0) is the main frame', value: worker.mainFrame?.frameId === 0 ? String(worker.mainFrame.url).split('/').pop() : worker.mainFrame });
     results.push({ check: 'worker: webNavigation events fired on reload', value: [...new Set(navEvents.map(e => e.event))] });
+    const tabEvents = Array.isArray(probe.tabEvents) ? probe.tabEvents : [];
+    results.push({ check: 'worker: chrome.tabs events fired on reload', value: tabEvents.length ? [...new Set(tabEvents.map(e => e.event))] : 'none fired' });
     results.push({ check: 'popup: sees itself in runtime.getContexts', value: contexts.map(c => c.contextType) });
     results.push({ check: 'popup: tabs.getCurrent() is undefined, as a popup is not a tab', value: popup.getCurrentTab === undefined ? 'undefined' : popup.getCurrentTab });
     results.push({ check: 'popup: its window matches the worker\'s', value: popup.windowsGetCurrent?.id ? popup.windowsGetCurrent.id === worker.windowsGetCurrent?.id : 'popup reported no window' });

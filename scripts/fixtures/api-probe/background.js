@@ -8,6 +8,17 @@ for (const name of ['onBeforeNavigate', 'onCommitted', 'onDOMContentLoaded', 'on
   });
 }
 
+// Does Electron fire the tab events extensions rely on to re-evaluate the current page?
+// Bitwarden refreshes its icon and autofill state from these.
+const tabEvents = [];
+const recordTab = (name) => (...args) => {
+  tabEvents.push({ event: name, arg: JSON.stringify(args[0] ?? null).slice(0, 80) });
+  chrome.storage.local.set({ tabEvents });
+};
+for (const name of ['onUpdated', 'onActivated', 'onRemoved', 'onCreated', 'onReplaced']) {
+  try { chrome.tabs[name].addListener(recordTab(name)); } catch (e) { tabEvents.push({ event: name, arg: `THREW: ${e.message}` }); }
+}
+
 async function probe() {
   const out = {};
   const attempt = async (name, fn) => {

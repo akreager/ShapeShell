@@ -13,6 +13,6 @@
   // Ask the worker to probe again now: its startup run happened while the page was still
   // loading, so it saw no iframe and a url of "".
   try { await chrome.runtime.sendMessage('probe-again'); } catch (e) { out.probeAgain = `failed: ${e.message}`; }
-  const stored = await chrome.storage.local.get(['worker', 'navEvents']);
+  const stored = await chrome.storage.local.get(['worker', 'navEvents', 'tabEvents']);
   document.getElementById('out').textContent = JSON.stringify({ ...out, ...stored });
 })();

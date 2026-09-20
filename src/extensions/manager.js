@@ -216,10 +216,39 @@ function emitToAll(name, args) {
 }
 
 // Hooks a ShapeShell window up as the one tab extensions can see, and turns its navigation
-// into chrome.webNavigation events.
+// into chrome.webNavigation and chrome.tabs events.
+//
+// Electron defines chrome.tabs.onUpdated and friends but never fires them (measured), so an
+// extension would never learn the page changed — Bitwarden refreshes its icon and autofill
+// state from exactly these.
 function attachWindow(shellRef) {
   apiHost.registerWindow(shellRef);
   const wc = shellRef.contentView.webContents;
+
+  const tabUpdate = (changeInfo) => {
+    if (wc.isDestroyed()) return;
+    emitToAll('tabs.onUpdated', [wc.id, changeInfo, apiHost.tabOf(shellRef)]);
+  };
+  wc.on('did-start-loading', () => tabUpdate({ status: 'loading' }));
+  wc.on('did-stop-loading', () => tabUpdate({ status: 'complete', url: wc.getURL(), title: wc.getTitle() }));
+  wc.on('did-navigate', (_event, url) => tabUpdate({ url, status: 'loading' }));
+  wc.on('did-navigate-in-page', (_event, url, isMainFrame) => { if (isMainFrame) tabUpdate({ url }); });
+  wc.on('page-title-updated', (_event, title) => tabUpdate({ title }));
+  wc.on('media-started-playing', () => tabUpdate({ audible: true }));
+  wc.on('media-paused', () => tabUpdate({ audible: false }));
+
+  // One tab per window, so focusing a window is what "activating a tab" means here.
+  shellRef.win.on('focus', () => {
+    emitToAll('tabs.onActivated', [{ tabId: wc.id, windowId: shellRef.win.id }]);
+    emitToAll('windows.onFocusChanged', [shellRef.win.id]);
+  });
+  shellRef.win.on('blur', () => {
+    if (!apiHost.focusedWindowExists()) emitToAll('windows.onFocusChanged', [apiHost.WINDOW_ID_NONE]);
+  });
+
+  emitToAll('tabs.onCreated', [apiHost.tabOf(shellRef)]);
+  emitToAll('windows.onCreated', [apiHost.windowOf(shellRef, false)]);
+
   const base = () => ({ tabId: wc.id, timeStamp: Date.now() });
   const frameDetails = (frame, url) => {
     const main = wc.mainFrame;
@@ -265,7 +294,12 @@ function attachWindow(shellRef) {
 }
 
 function detachWindow(shellRef) {
+  // Read the ids before unregistering: the window is already on its way out.
+  const tabId = shellRef.contentView.webContents.isDestroyed() ? null : shellRef.contentView.webContents.id;
+  const windowId = shellRef.win.isDestroyed() ? null : shellRef.win.id;
   apiHost.unregisterWindow(shellRef);
+  if (tabId !== null) emitToAll('tabs.onRemoved', [tabId, { windowId, isWindowClosing: true }]);
+  if (windowId !== null) emitToAll('windows.onRemoved', [windowId]);
 }
 
 // What the toolbar tray draws. Extensions with no action (content-script only) are omitted.
