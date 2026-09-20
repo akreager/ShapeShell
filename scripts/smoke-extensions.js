@@ -8,16 +8,20 @@
 //   npm run smoke-extensions -- <unpacked-dir>...  # real extensions instead
 //
 // It uses its own userData directory, so it never touches a real Onshape profile, and it
-// loads about:blank rather than cad.onshape.com: this tests our chrome, not the site.
+// loads a local page rather than cad.onshape.com: this tests our chrome, not the site. That
+// page carries one iframe, so frame enumeration has something real to report.
 
 const { app, session } = require('electron');
 const fs = require('node:fs');
+const http = require('node:http');
 const path = require('node:path');
 
 const OUT = path.join(__dirname, '..', 'dist', 'smoke-extensions');
 const FIXTURE = path.join(__dirname, 'fixtures', 'action-probe');
+const API_FIXTURE = path.join(__dirname, 'fixtures', 'api-probe');
+const PAGES = path.join(__dirname, 'fixtures', 'pages');
 const dirs = process.argv.slice(2).filter(a => !a.startsWith('--'));
-if (dirs.length === 0) dirs.push(FIXTURE);
+if (dirs.length === 0) dirs.push(FIXTURE, API_FIXTURE);
 
 fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(OUT, { recursive: true });
@@ -48,13 +52,31 @@ async function shot(view, name) {
 
 app.on('window-all-closed', () => {});
 
+// Served over http, not file://, so host permissions and script injection behave as they do
+// on a real site.
+function servePages() {
+  const server = http.createServer((req, res) => {
+    const name = path.basename(new URL(req.url, 'http://127.0.0.1').pathname) || 'host.html';
+    const file = path.join(PAGES, name);
+    if (!file.startsWith(PAGES) || !fs.existsSync(file)) {
+      res.writeHead(404).end('not found');
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(fs.readFileSync(file));
+  });
+  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
 app.whenReady().then(async () => {
   const ses = session.fromPartition(PARTITION);
   await extensions.init(ses);
   registerIpc();
 
   step('building the window');
-  const shell = createShellWindow({ url: 'about:blank' });
+  const server = await servePages();
+  const hostPage = `http://127.0.0.1:${server.address().port}/host.html`;
+  step(`serving the probe page at ${hostPage}`);
+  const shell = createShellWindow({ url: hostPage });
   shell.win.show();
   await sleep(4000);
   step('window up');
@@ -123,6 +145,51 @@ app.whenReady().then(async () => {
     results.push({ check: 'no popup opened for a popup-less action', value: !shell.extPopup.isOpen });
   }
 
+  // The window and tab model extensions see: one window, one tab, real frames.
+  const apiProbe = extensions.listActions().find(a => a.name === 'ShapeShell API probe');
+  if (apiProbe) {
+    step('reloading the content view to generate webNavigation events');
+    shell.contentView.webContents.reload();
+    await sleep(2500);
+
+    // By title, not by index: listActions() builds fresh objects every call, so indexOf on
+    // a second call is always -1 and the click lands nowhere.
+    await limit(shell.chromeView.webContents.executeJavaScript(
+      `[...document.querySelectorAll('#tray button')].find(b => b.title.startsWith('API probe')).click()`), 5000, 'click timed out');
+    await sleep(3500);
+    step(`api probe popup ${shell.extPopup.isOpen ? 'open' : 'NOT OPEN'}`);
+    const raw = shell.extPopup.isOpen
+      ? await limit(shell.extPopup.view.webContents.executeJavaScript(
+        'document.getElementById("out").textContent'), 8000, 'read timed out')
+      : 'popup did not open';
+    let probe = {};
+    try { probe = JSON.parse(raw); } catch { probe = { parseError: String(raw).slice(0, 200) }; }
+    fs.writeFileSync(path.join(OUT, 'api-probe.json'), JSON.stringify(probe, null, 2));
+
+    const worker = probe.worker || {};
+    const popup = probe.popup || {};
+    const tab = Array.isArray(worker.activeCurrentWindow) ? worker.activeCurrentWindow[0] : null;
+    const frames = Array.isArray(worker.allFrames) ? worker.allFrames : [];
+    const navEvents = Array.isArray(probe.navEvents) ? probe.navEvents : [];
+    const contexts = Array.isArray(popup.contexts) ? popup.contexts : [];
+
+    results.push({ check: 'worker: tabs.query({active, currentWindow}) returns the Onshape tab', value: tab ? { id: tab.id, windowId: tab.windowId, url: tab.url, status: tab.status } : worker.activeCurrentWindow });
+    results.push({ check: 'worker: windowId:WINDOW_ID_CURRENT agrees', value: tab ? JSON.stringify(worker.activeWindowIdCurrent) === JSON.stringify(worker.activeCurrentWindow) : 'no tab, so nothing to agree about' });
+    results.push({ check: 'worker: windows.getCurrent({populate}) holds that one tab', value: worker.windowsGetCurrent?.tabs?.length === 1 && worker.windowsGetCurrent.tabs[0].id === tab?.id ? `window ${worker.windowsGetCurrent.id}` : worker.windowsGetCurrent });
+    results.push({ check: 'worker: tabs.get round-trips', value: tab && worker.tabsGet?.id === tab.id ? `tab ${tab.id}` : worker.tabsGet ?? 'no tab to get' });
+    results.push({ check: 'worker: webNavigation.getAllFrames sees the page and its iframe', value: frames.map(f => ({ frameId: f.frameId, parentFrameId: f.parentFrameId, url: String(f.url).split('/').pop() })) });
+    results.push({ check: 'worker: webNavigation.getFrame(0) is the main frame', value: worker.mainFrame?.frameId === 0 ? String(worker.mainFrame.url).split('/').pop() : worker.mainFrame });
+    results.push({ check: 'worker: webNavigation events fired on reload', value: [...new Set(navEvents.map(e => e.event))] });
+    results.push({ check: 'popup: sees itself in runtime.getContexts', value: contexts.map(c => c.contextType) });
+    results.push({ check: 'popup: tabs.getCurrent() is undefined, as a popup is not a tab', value: popup.getCurrentTab === undefined ? 'undefined' : popup.getCurrentTab });
+    results.push({ check: 'popup: its window matches the worker\'s', value: popup.windowsGetCurrent?.id ? popup.windowsGetCurrent.id === worker.windowsGetCurrent?.id : 'popup reported no window' });
+    // How autofill actually reaches a login form, including one inside an iframe.
+    results.push({ check: 'worker: scripting.executeScript into the main frame', value: worker.injectMainFrame });
+    results.push({ check: 'worker: scripting.executeScript into the iframe', value: worker.injectSubFrame ?? 'no subframe was found to inject into' });
+    shell.extPopup.close();
+    await sleep(500);
+  }
+
   const withPopup = actions.find(a => a.hasPopup);
   if (withPopup) {
     const clickIt = () => shell.chromeView.webContents.executeJavaScript(
@@ -138,6 +205,16 @@ app.whenReady().then(async () => {
       check: 'popup bounds after resizing the window to 900x700',
       value: shell.extPopup.isOpen ? shell.extPopup.view.getBounds() : 'popup closed on resize',
     });
+
+    // A page finishing a load takes focus on its own. The popup must not vanish for that:
+    // only a real click elsewhere dismisses it.
+    step('popup survives a content-view reload');
+    if (!shell.extPopup.isOpen) { await clickIt(); await sleep(2000); }
+    shell.contentView.webContents.reload();
+    await sleep(3000);
+    results.push({ check: 'action popup survives a page load in the content view', value: shell.extPopup.isOpen });
+    shell.extPopup.close();
+    await sleep(400);
 
     // The hamburger popover and an action popup must never be on screen together.
     step('menu vs popup check');
@@ -159,6 +236,7 @@ app.whenReady().then(async () => {
   // An open popup view keeps the window alive, and app.quit() then never finishes.
   shell.extPopup.destroy();
   shell.win.destroy();
+  server.close();
 }).catch((e) => {
   console.error(e);
   process.exitCode = 1;

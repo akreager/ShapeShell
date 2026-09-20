@@ -2,9 +2,13 @@
 
 // The extension action popup: one host per ShapeShell window (extensions phase 1).
 //
-// Chrome sizes an action popup to its content, up to 800x600, and closes it as soon as it
-// loses focus. Electron gives us the first for free through enablePreferredSizeMode; the
-// second is wired up here.
+// Chrome sizes an action popup to its content, up to 800x600, and dismisses it when the
+// user interacts with anything else. Electron gives us the first for free through
+// enablePreferredSizeMode.
+//
+// Dismissal deliberately watches for a real click elsewhere (webContents 'input-event')
+// rather than the popup losing focus: a page finishing a load takes focus on its own, and a
+// blur-based popup would vanish while the user was reading it.
 
 const { WebContentsView, shell } = require('electron');
 const manager = require('./manager');
@@ -16,8 +20,10 @@ const MIN_HEIGHT = 80;
 const MARGIN = 8;
 
 class ExtensionPopup {
-  constructor({ win, partition, toolbarHeight, cornerRadius, onClosed }) {
+  constructor({ win, contentView, chromeView, partition, toolbarHeight, cornerRadius, onClosed }) {
     this.win = win;
+    this.contentView = contentView;
+    this.chromeView = chromeView;
     this.partition = partition;
     this.toolbarHeight = toolbarHeight;
     this.cornerRadius = cornerRadius;
@@ -27,6 +33,29 @@ class ExtensionPopup {
     this.anchorRight = 0;
     this.size = { width: 360, height: 480 };
     this.lastClosed = { extId: null, at: 0 };
+    this.dismissers = [];
+  }
+
+  // A click in the Onshape view or the toolbar dismisses the popup, as does the whole window
+  // losing focus. Clicking the popup's own tray icon lands here first, which is what makes a
+  // second click on that icon close it rather than reopen it (see toggle).
+  watchForDismissal() {
+    const onInput = (_event, input) => { if (input.type === 'mouseDown') this.close(); };
+    const onWindowBlur = () => this.close();
+    const views = [this.contentView, this.chromeView].filter(v => v && !v.webContents.isDestroyed());
+    for (const view of views) view.webContents.on('input-event', onInput);
+    this.win.on('blur', onWindowBlur);
+    this.dismissers = [
+      ...views.map(view => () => {
+        if (!view.webContents.isDestroyed()) view.webContents.off('input-event', onInput);
+      }),
+      () => { if (!this.win.isDestroyed()) this.win.off('blur', onWindowBlur); },
+    ];
+  }
+
+  stopWatchingForDismissal() {
+    for (const off of this.dismissers) off();
+    this.dismissers = [];
   }
 
   get isOpen() {
@@ -84,8 +113,7 @@ class ExtensionPopup {
       return { action: 'deny' };
     });
 
-    // Chrome dismisses a popup on focus loss and on Escape.
-    wc.on('blur', () => this.close());
+    this.watchForDismissal();
     wc.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && input.key === 'Escape') {
         event.preventDefault();
@@ -95,6 +123,7 @@ class ExtensionPopup {
     // window.close() from inside the popup, which extensions use to dismiss themselves.
     wc.on('destroyed', () => {
       if (this.view === view) {
+        this.stopWatchingForDismissal();
         this.lastClosed = { extId: this.extId, at: Date.now() };
         this.view = null;
         this.extId = null;
@@ -111,6 +140,7 @@ class ExtensionPopup {
   close() {
     const view = this.view;
     if (!view) return;
+    this.stopWatchingForDismissal();
     this.lastClosed = { extId: this.extId, at: Date.now() };
     this.view = null;
     this.extId = null;

@@ -1,29 +1,35 @@
 'use strict';
 
 // Runs inside extension contexts: registered session-wide for service workers
-// (ses.registerPreloadScript) and set as the preload of the popup views we create. It is
+// (ses.registerPreloadScript) and set as the preload of the extension views we create. It is
 // never attached to the Onshape content view.
 //
-// Two jobs:
-//   1. Report chrome.action calls to the main process, since Electron implements the API
-//      but nothing draws it — the toolbar tray does.
-//   2. Supply namespaces Electron does not implement, so extensions that read them at
-//      startup can run at all. Measured against Electron 44.4.1 in phase 0; see
-//      docs/extensions-plan.md. Everything here is inert: phase 2 gives webNavigation,
-//      tabs.query, windows and notifications real behaviour.
+// Three jobs:
+//   1. Report chrome.action calls to the main process, since Electron implements the API but
+//      nothing draws it — the toolbar tray does.
+//   2. Supply the namespaces Electron does not implement, backed by src/extensions/api-host.js:
+//      windows, webNavigation, and the parts of tabs and runtime that Electron gets wrong for
+//      a one-tab-per-window app.
+//   3. Keep the remaining namespaces inert so extensions that read them at startup can run.
+//
+// Measured against Electron 44.4.1; see docs/extensions-plan.md.
 
 const { contextBridge, ipcRenderer } = require('electron');
 
 const ACTION_CHANNEL = 'shapeshell-ext:action';
 const READY_CHANNEL = 'shapeshell-ext:ready';
 const CLICK_CHANNEL = 'shapeshell-ext:clicked';
+const INVOKE_CHANNEL = 'shapeshell-ext:invoke';
+const EVENT_CHANNEL = 'shapeshell-ext:event';
 
-// The main world gets these functions, not ipcRenderer itself, so an extension can only
-// ever reach these three verbs.
+// The main world gets these functions, not ipcRenderer itself, so an extension can only ever
+// reach these verbs.
 const bridge = {
   action: (extId, patch) => ipcRenderer.send(ACTION_CHANNEL, extId, patch),
   ready: (extId, detail) => ipcRenderer.send(READY_CHANNEL, extId, detail),
+  invoke: (extId, method, args) => ipcRenderer.invoke(INVOKE_CHANNEL, extId, method, args),
   onClicked: (cb) => ipcRenderer.on(CLICK_CHANNEL, (_event, extId) => cb(extId)),
+  onEvent: (cb) => ipcRenderer.on(EVENT_CHANNEL, (_event, name, args) => cb(name, args)),
 };
 
 contextBridge.executeInMainWorld({
@@ -37,6 +43,54 @@ contextBridge.executeInMainWorld({
     const extId = chrome.runtime.id;
     const manifest = chrome.runtime.getManifest();
     const isWorker = typeof ServiceWorkerGlobalScope !== 'undefined';
+
+    // ---- helpers -----------------------------------------------------------------------
+    const events = new Map();
+    const event = (name) => {
+      const listeners = new Set();
+      const api = {
+        addListener: (fn) => { listeners.add(fn); },
+        removeListener: (fn) => { listeners.delete(fn); },
+        hasListener: (fn) => listeners.has(fn),
+        hasListeners: () => listeners.size > 0,
+      };
+      if (name) {
+        events.set(name, (args) => {
+          for (const fn of [...listeners]) {
+            try { fn(...args); } catch (e) { console.error(`[shapeshell] ${name} listener failed`, e); }
+          }
+        });
+      }
+      return api;
+    };
+    host.onEvent((name, args) => events.get(name)?.(args));
+
+    // Chrome APIs either return a promise or call a trailing callback asynchronously.
+    const api = (impl) => (...args) => {
+      const cb = typeof args[args.length - 1] === 'function' ? args.pop() : null;
+      const result = Promise.resolve().then(() => impl(...args));
+      if (!cb) return result;
+      result.then((v) => cb(v), (e) => { console.error('[shapeshell]', e); cb(undefined); });
+      return undefined;
+    };
+    // A call into the main process, which owns the window and tab model.
+    const call = (method) => api((...args) => host.invoke(extId, method, args));
+
+    const added = [];
+    const define = (obj, key, value) => {
+      if (key in obj) return;
+      Object.defineProperty(obj, key, { value, configurable: true, enumerable: true, writable: true });
+      added.push(key);
+    };
+    const replaced = [];
+    const replace = (obj, key, value) => {
+      try {
+        Object.defineProperty(obj, key, { value, configurable: true, enumerable: true, writable: true });
+        replaced.push(key);
+      } catch (e) {
+        console.error(`[shapeshell] could not replace chrome.${key}`, e);
+      }
+    };
 
     // ---- chrome.action -> the toolbar tray ---------------------------------------------
     const action = chrome.action || chrome.browserAction;
@@ -66,58 +120,73 @@ contextBridge.executeInMainWorld({
       // Electron defines action.onClicked but never fires it, so replace it outright: the
       // tray is what clicks the action, and only in the background context.
       if (isWorker) {
-        const listeners = new Set();
-        Object.defineProperty(action, 'onClicked', {
-          configurable: true,
-          value: {
-            addListener: (fn) => { listeners.add(fn); },
-            removeListener: (fn) => { listeners.delete(fn); },
-            hasListener: (fn) => listeners.has(fn),
-            hasListeners: () => listeners.size > 0,
-          },
+        const clicked = event();
+        const listeners = [];
+        replace(action, 'onClicked', {
+          addListener: (fn) => { listeners.push(fn); clicked.addListener(fn); },
+          removeListener: (fn) => clicked.removeListener(fn),
+          hasListener: (fn) => clicked.hasListener(fn),
+          hasListeners: () => clicked.hasListeners(),
         });
-        host.onClicked((clicked) => {
-          if (clicked !== extId) return;
+        host.onClicked(async (clickedId) => {
+          if (clickedId !== extId) return;
+          // Chrome passes the active tab; ours comes from the main process.
+          let tab;
+          try { tab = (await host.invoke(extId, 'tabs.query', [{ active: true, currentWindow: true }]))?.[0]; } catch { /* no window */ }
           for (const fn of listeners) {
-            // A tab argument would be a lie until phase 2 implements tabs.query.
-            try { fn(undefined); } catch (e) { console.error('[shapeshell] action.onClicked listener failed', e); }
+            try { fn(tab); } catch (e) { console.error('[shapeshell] action.onClicked listener failed', e); }
           }
         });
       }
     }
 
+    // ---- chrome.tabs: the parts Electron gets wrong for one tab per window -------------
+    if (chrome.tabs) {
+      replace(chrome.tabs, 'query', call('tabs.query'));
+      replace(chrome.tabs, 'get', call('tabs.get'));
+      replace(chrome.tabs, 'update', call('tabs.update'));
+      define(chrome.tabs, 'getCurrent', call('tabs.getCurrent'));
+      define(chrome.tabs, 'create', call('tabs.create'));
+      define(chrome.tabs, 'TAB_ID_NONE', -1);
+      define(chrome.tabs, 'TAB_INDEX_NONE', -1);
+    }
+
+    // Chromium's own getContexts hits a NOTREACHED on our popup views ("Unexpected view
+    // type found: 0"), so this never calls into it.
+    if (chrome.runtime) replace(chrome.runtime, 'getContexts', call('runtime.getContexts'));
+
     // ---- namespaces Electron does not implement ----------------------------------------
-    const event = () => {
-      const listeners = new Set();
-      return {
-        addListener: (fn) => { listeners.add(fn); },
-        removeListener: (fn) => { listeners.delete(fn); },
-        hasListener: (fn) => listeners.has(fn),
-        hasListeners: () => listeners.size > 0,
-      };
-    };
-    // Chrome APIs either return a promise or call a trailing callback asynchronously.
-    const api = (impl) => (...args) => {
-      const cb = typeof args[args.length - 1] === 'function' ? args.pop() : null;
-      const result = Promise.resolve().then(() => impl(...args));
-      if (!cb) return result;
-      result.then((v) => cb(v));
-      return undefined;
-    };
-    const added = [];
-    const define = (obj, key, value) => {
-      if (key in obj) return;
-      Object.defineProperty(obj, key, { value, configurable: true, enumerable: true, writable: true });
-      added.push(key);
-    };
+    define(chrome, 'windows', {
+      WINDOW_ID_NONE: -1,
+      WINDOW_ID_CURRENT: -2,
+      onCreated: event('windows.onCreated'),
+      onRemoved: event('windows.onRemoved'),
+      onFocusChanged: event('windows.onFocusChanged'),
+      onBoundsChanged: event('windows.onBoundsChanged'),
+      get: call('windows.get'),
+      getCurrent: call('windows.getCurrent'),
+      getLastFocused: call('windows.getLastFocused'),
+      getAll: call('windows.getAll'),
+      create: call('windows.create'),
+      update: call('windows.update'),
+      remove: call('windows.remove'),
+    });
 
     define(chrome, 'webNavigation', {
-      onBeforeNavigate: event(), onCommitted: event(), onDOMContentLoaded: event(),
-      onCompleted: event(), onErrorOccurred: event(), onCreatedNavigationTarget: event(),
-      onHistoryStateUpdated: event(), onReferenceFragmentUpdated: event(), onTabReplaced: event(),
-      getFrame: api(() => null),
-      getAllFrames: api(() => []),
+      onBeforeNavigate: event('webNavigation.onBeforeNavigate'),
+      onCommitted: event('webNavigation.onCommitted'),
+      onDOMContentLoaded: event('webNavigation.onDOMContentLoaded'),
+      onCompleted: event('webNavigation.onCompleted'),
+      onErrorOccurred: event('webNavigation.onErrorOccurred'),
+      onCreatedNavigationTarget: event('webNavigation.onCreatedNavigationTarget'),
+      onHistoryStateUpdated: event('webNavigation.onHistoryStateUpdated'),
+      onReferenceFragmentUpdated: event('webNavigation.onReferenceFragmentUpdated'),
+      onTabReplaced: event('webNavigation.onTabReplaced'),
+      getFrame: call('webNavigation.getFrame'),
+      getAllFrames: call('webNavigation.getAllFrames'),
     });
+
+    // ---- inert: nothing in ShapeShell provides these -----------------------------------
     let menuId = 0;
     define(chrome, 'contextMenus', {
       onClicked: event(),
@@ -152,8 +221,9 @@ contextBridge.executeInMainWorld({
       create: api((id) => (typeof id === 'string' ? id : `n${++noteId}`)),
       clear: api(() => true), getAll: api(() => ({})), update: api(() => false),
     });
-    if (chrome.tabs) define(chrome.tabs, 'getCurrent', api(() => undefined));
 
-    try { host.ready(extId, `${isWorker ? 'worker' : location.pathname}: added ${added.join(', ') || 'nothing'}`); } catch { /* ignore */ }
+    try {
+      host.ready(extId, `${isWorker ? 'worker' : location.pathname}: added ${added.join(', ') || 'nothing'}; replaced ${replaced.join(', ') || 'nothing'}`);
+    } catch { /* ignore */ }
   },
 });

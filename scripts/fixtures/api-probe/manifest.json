@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "ShapeShell API probe",
+  "version": "1.0.0",
+  "description": "Fixture: exercises the tabs, windows, runtime.getContexts and webNavigation APIs ShapeShell supplies, from both the service worker and a popup.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "API probe",
+    "default_popup": "popup.html"
+  },
+  "host_permissions": [
+    "http://127.0.0.1/*"
+  ]
+}

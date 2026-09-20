@@ -158,6 +158,8 @@ function createShellWindow({ adoptedContents = null, url = START_URL, persistBou
   // The action popup creates and destroys its own view on top of everything else.
   const extPopup = new ExtensionPopup({
     win,
+    contentView,
+    chromeView,
     partition: PARTITION,
     toolbarHeight: TOOLBAR_HEIGHT,
     cornerRadius: CORNER_RADIUS,
@@ -271,6 +273,8 @@ function createShellWindow({ adoptedContents = null, url = START_URL, persistBou
   const stopWatchingExtensions = extensions.onChange(pushExtensions);
 
   const shellRef = { win, chromeView, contentView, popoverView, extPopup };
+  // Extensions see this window as one window holding one tab: the Onshape content view.
+  extensions.attachWindow(shellRef);
   shells.set(chromeView.webContents.id, shellRef);
   shells.set(popoverView.webContents.id, shellRef);
 
@@ -281,6 +285,7 @@ function createShellWindow({ adoptedContents = null, url = START_URL, persistBou
 
   win.on('closed', () => {
     stopWatchingExtensions();
+    extensions.detachWindow(shellRef);
     extPopup.destroy();
     shells.delete(chromeView.webContents.id);
     shells.delete(popoverView.webContents.id);

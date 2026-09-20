@@ -13,12 +13,17 @@ const { app, ipcMain } = require('electron');
 const EventEmitter = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
+const apiHost = require('./api-host');
 
 const PRELOAD = path.join(__dirname, 'preload.js');
 // Extension contexts report action state on these; nothing else may send them.
 const ACTION_CHANNEL = 'shapeshell-ext:action';
 const READY_CHANNEL = 'shapeshell-ext:ready';
 const CLICK_CHANNEL = 'shapeshell-ext:clicked';
+// Extension contexts call the APIs Electron lacks over this; main pushes their events back
+// over EVENT_CHANNEL. See src/extensions/api-host.js.
+const INVOKE_CHANNEL = 'shapeshell-ext:invoke';
+const EVENT_CHANNEL = 'shapeshell-ext:event';
 
 const emitter = new EventEmitter();
 const state = new Map(); // extension id -> { extension, action }
@@ -137,12 +142,17 @@ async function init(ses) {
     if (!worker) return;
     attached.add(versionId);
     worker.ipc.on(ACTION_CHANNEL, (_event, extId, patch) => applyActionPatch(extId, patch));
+    worker.ipc.handle(INVOKE_CHANNEL, (_event, extId, method, args) => dispatch(null, extId, method, args));
     worker.ipc.on(READY_CHANNEL, (_event, extId, detail) => log(`worker ready: ${extId} ${detail || ''}`));
   });
 
   // Extension pages (popups) use the ordinary renderer IPC.
   ipcMain.on(ACTION_CHANNEL, (event, extId, patch) => {
     if (event.sender.session === extSession) applyActionPatch(extId, patch);
+  });
+  ipcMain.handle(INVOKE_CHANNEL, (event, extId, method, args) => {
+    if (event.sender.session !== extSession) throw new Error('Not an extension context');
+    return dispatch(event.sender.id, extId, method, args);
   });
   ipcMain.on(READY_CHANNEL, (event, extId, detail) => {
     if (event.sender.session === extSession) log(`page ready: ${extId} ${detail || ''}`);
@@ -155,6 +165,107 @@ async function init(ses) {
       log(`FAILED to load ${dir}: ${e.message}`);
     }
   }
+}
+
+// ---------------------------------------------------------------------------------------
+// API host plumbing
+// ---------------------------------------------------------------------------------------
+
+// A call is honoured only for an extension we actually loaded.
+async function dispatch(senderId, extId, method, args) {
+  const entry = state.get(extId);
+  if (!entry) throw new Error('Unknown extension');
+  const handler = apiHost.handlers[method];
+  if (!handler) throw new Error(`Unsupported method: ${method}`);
+  return handler({
+    senderId,
+    extId,
+    extensionUrl: entry.extension.url,
+    session: extSession,
+    preloadPath: PRELOAD,
+  }, ...(Array.isArray(args) ? args : []));
+}
+
+function runningWorkers() {
+  const out = [];
+  for (const [versionId, info] of Object.entries(extSession.serviceWorkers.getAllRunning())) {
+    const worker = extSession.serviceWorkers.getWorkerFromVersionID(Number(versionId));
+    if (worker && !worker.isDestroyed()) out.push({ worker, scope: info.scope });
+  }
+  return out;
+}
+
+// Events go to every context of the extension: its worker, and any popup or window of ours
+// showing one of its pages.
+function emitToExtension(extId, name, args) {
+  const entry = state.get(extId);
+  if (!entry) return;
+  for (const { worker, scope } of runningWorkers()) {
+    if (scope && scope.startsWith(entry.extension.url)) worker.send(EVENT_CHANNEL, name, args);
+  }
+  for (const shellRef of apiHost.liveWindows()) {
+    const view = shellRef.extPopup?.view;
+    if (view && shellRef.extPopup.extId === extId && !view.webContents.isDestroyed()) {
+      view.webContents.send(EVENT_CHANNEL, name, args);
+    }
+  }
+}
+
+function emitToAll(name, args) {
+  for (const extId of state.keys()) emitToExtension(extId, name, args);
+}
+
+// Hooks a ShapeShell window up as the one tab extensions can see, and turns its navigation
+// into chrome.webNavigation events.
+function attachWindow(shellRef) {
+  apiHost.registerWindow(shellRef);
+  const wc = shellRef.contentView.webContents;
+  const base = () => ({ tabId: wc.id, timeStamp: Date.now() });
+  const frameDetails = (frame, url) => {
+    const main = wc.mainFrame;
+    return {
+      ...base(),
+      url: url ?? frame?.url ?? wc.getURL(),
+      frameId: frame ? apiHost.frameIdOf(frame, main) : 0,
+      parentFrameId: frame?.parent ? apiHost.frameIdOf(frame.parent, main) : -1,
+      processId: frame?.processId ?? wc.mainFrame.processId,
+      frameType: frame?.parent ? 'sub_frame' : 'outermost_frame',
+      documentLifecycle: 'active',
+    };
+  };
+
+  wc.on('did-start-navigation', (details) => {
+    emitToAll('webNavigation.onBeforeNavigate', [frameDetails(details.frame, details.url)]);
+  });
+  wc.on('did-frame-navigate', (_event, url, httpResponseCode, _method, _isMainFrame, frameProcessId, frameRoutingId) => {
+    const frame = require('electron').webFrameMain.fromId(frameProcessId, frameRoutingId);
+    emitToAll('webNavigation.onCommitted', [{
+      ...frameDetails(frame, url),
+      transitionType: 'link',
+      transitionQualifiers: [],
+    }]);
+    if (httpResponseCode >= 400) {
+      emitToAll('webNavigation.onErrorOccurred', [{ ...frameDetails(frame, url), error: `HTTP ${httpResponseCode}` }]);
+    }
+  });
+  wc.on('dom-ready', () => emitToAll('webNavigation.onDOMContentLoaded', [frameDetails(wc.mainFrame)]));
+  wc.on('did-finish-load', () => emitToAll('webNavigation.onCompleted', [frameDetails(wc.mainFrame)]));
+  wc.on('did-fail-load', (_event, code, description, url, isMainFrame, frameProcessId, frameRoutingId) => {
+    const frame = require('electron').webFrameMain.fromId(frameProcessId, frameRoutingId);
+    emitToAll('webNavigation.onErrorOccurred', [{ ...frameDetails(frame, url), error: description || `net error ${code}` }]);
+  });
+  wc.on('did-navigate-in-page', (_event, url, isMainFrame, frameProcessId, frameRoutingId) => {
+    const frame = require('electron').webFrameMain.fromId(frameProcessId, frameRoutingId);
+    emitToAll('webNavigation.onHistoryStateUpdated', [{
+      ...frameDetails(frame, url),
+      transitionType: 'link',
+      transitionQualifiers: [],
+    }]);
+  });
+}
+
+function detachWindow(shellRef) {
+  apiHost.unregisterWindow(shellRef);
 }
 
 // What the toolbar tray draws. Extensions with no action (content-script only) are omitted.
@@ -207,6 +318,9 @@ module.exports = {
   listActions,
   popupUrl,
   click,
+  attachWindow,
+  detachWindow,
+  emitToExtension,
   get,
   preloadPath: PRELOAD,
   onChange: (fn) => { emitter.on('changed', fn); return () => emitter.off('changed', fn); },

@@ -1,6 +1,6 @@
 # Extension support: plan
 
-Branch: `feature/extensions`. Status: phases 0 and 1 done — see [Phase 0 results](#phase-0-results) and [Phase 1 results](#phase-1-results). The tray and popups work; there is no install path yet, so extensions load only from `SHAPESHELL_DEV_EXTENSIONS` when running from source. Replaces the design-only handoff from 2026-09-19. Where the two disagree, this file wins; `CLAUDE.md` wins over both.
+Branch: `feature/extensions`. Status: phases 0 and 1 done, phase 2 built and awaiting a real Bitwarden login — see [Phase 0 results](#phase-0-results), [Phase 1 results](#phase-1-results) and [Phase 2 results](#phase-2-results). The tray and popups work; there is no install path yet, so extensions load only from `SHAPESHELL_DEV_EXTENSIONS` when running from source. Replaces the design-only handoff from 2026-09-19. Where the two disagree, this file wins; `CLAUDE.md` wins over both.
 
 ## Goal
 
@@ -38,7 +38,7 @@ Each phase ends with something runnable. None of them touch `main` until the fea
 
 0. ~~**API survey.**~~ DONE. `npm run ext-survey`; results below. It ran in a throwaway profile rather than `persist:onshape`, so the survey can never disturb a real sign-in.
 1. ~~**Tray and popup host.**~~ DONE; results below. Still outstanding from this phase, because it needs a signed-in session: the drawing-editor content scripts and `all_frames` on the `production-drawing-*` iframe.
-2. **Bitwarden compatibility.** Turn the phase-0 polyfill spike into real implementations, then test login, unlock, autofill on the Onshape sign-in page, and autofill in a second window. See [what phase 2 must implement](#what-phase-2-must-implement).
+2. **Bitwarden compatibility.** Implementations built and tested against a fixture; login, unlock and autofill against a real vault are still to confirm. See [Phase 2 results](#phase-2-results).
 3. **Install pipeline and allowlist.** CRX3 parse and signature check, unpacked tree hash, manifest subset checks, safe unpacking (zip-slip, symlinks, size caps), and a re-check on every launch.
 4. **Management UI.** List, pin, remove, and a clear message when an install is refused.
 5. **Flatpak.** Portal chooser, persistence under `~/.var/app/…`, and no new finish-args.
@@ -110,6 +110,42 @@ Known gaps, deliberately left for later phases:
 - `setIcon` accepts a path, not `imageData`.
 - Every loaded extension appears in the tray; pin and unpin are phase 4.
 - A popup's preferred size includes its scrollbar, so a scrolling popup is a few pixels wider than in Chrome.
+
+## Phase 2 results
+
+Built 2026-09-20, after a real sign-in attempt showed Bitwarden getting through login and 2FA and then failing to load the vault, with three distinct errors:
+
+| Symptom in the log | Cause | Fix |
+|---|---|---|
+| `Cannot read properties of undefined (reading 'WINDOW_ID_CURRENT')` | No `chrome.windows` at all | A real window and tab model |
+| `NOTREACHED hit. Unexpected view type found: 0` every 10s | Bitwarden polls `chrome.runtime.getContexts`; Chromium does not recognise a `WebContentsView` as an extension view | `getContexts` answered by us, so that code path is never entered |
+| `Error: Null or undefined account` | Expected downstream of the above | To be confirmed with a real login |
+
+**The model:** ShapeShell has no tabs, so each window is a window holding exactly one tab — its Onshape content view. Tab ids are that view's `webContents` id, window ids are the `BaseWindow` id, and both last as long as the window. `src/extensions/api-host.js` owns it; the preload installs thin wrappers that call through.
+
+Implemented: `tabs.query` (including `currentWindow` and `WINDOW_ID_CURRENT`, which Electron ignores), `tabs.get`, `tabs.update`, `tabs.getCurrent`, `tabs.create`, all of `windows`, `runtime.getContexts`, and `webNavigation` — `getFrame` and `getAllFrames` plus live `onBeforeNavigate`, `onCommitted`, `onDOMContentLoaded`, `onCompleted`, `onErrorOccurred` and `onHistoryStateUpdated` fed from the content view.
+
+Deliberate policy choices:
+
+- **An extension cannot navigate the Onshape view.** `tabs.create` and `tabs.update` with an `http(s)` url hand it to the system browser instead, which is where Bitwarden's web vault and help links belong.
+- **`windows.create` gives an extension's own page a real window** (Bitwarden's popped-out vault); anything on the web goes to the browser. `windows.remove` only closes windows we opened for an extension.
+- **`permissions.request` still refuses**, so optional `nativeMessaging` and `privacy` stay off.
+
+Verified by `npm run smoke-extensions` through a new fixture (`scripts/fixtures/api-probe`) that asks the same questions a password manager asks, from both the worker and a popup, against a local page served over HTTP with one iframe:
+
+- `tabs.query({active: true, currentWindow: true})` returns the Onshape tab with its real url and status, and `windowId: WINDOW_ID_CURRENT` agrees with it
+- `windows.getCurrent({populate: true})` holds exactly that tab, and the popup's window matches the worker's
+- `webNavigation.getAllFrames` returns the page and its iframe with the right parent relationship, and events fire on reload
+- `runtime.getContexts` reports `BACKGROUND` and, while it is open, `POPUP`
+- **`scripting.executeScript` reaches a subframe by `frameId`** — the mechanism autofill needs — as well as the main frame
+
+Measured behaviour worth keeping:
+
+- **Popups must not be dismissed on focus loss.** A page finishing a load takes focus by itself, which closed the popup while it was being read. Dismissal now watches for a real `mouseDown` in the content view or toolbar, or the window losing focus, which is both closer to Chrome and stable. A smoke check covers it.
+- **`listActions()` builds fresh objects on every call**, so `indexOf` against a later call is always `-1`. The smoke test finds tray buttons by title.
+- **A service worker's startup probe runs before the window has finished loading**, so anything asking "what is the user looking at?" at that moment sees an empty url and no frames. Real extensions re-query on events; the fixture re-probes on demand.
+
+Still to confirm, and it needs a real vault: login, unlock, autofill on the Onshape sign-in page, and the popped-out vault window.
 
 ## Decisions
 
