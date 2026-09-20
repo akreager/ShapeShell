@@ -294,6 +294,42 @@ app.whenReady().then(async () => {
     });
   }
 
+  // The allowlist path: an extension nobody approved is refused, an approved one installs,
+  // loads and appears in the tray.
+  const drawingComfort = path.join(__dirname, '..', 'dist', 'ext-survey', 'downloads', 'drawing-comfort');
+  if (fs.existsSync(drawingComfort)) {
+    step('installing through the allowlist');
+    let refusedReason = null;
+    try {
+      await extensions.installFromPath(API_FIXTURE);
+    } catch (e) {
+      refusedReason = e.message;
+    }
+    results.push({
+      check: 'an extension that is not on the allowlist is refused',
+      value: refusedReason ? refusedReason.slice(0, 80) : 'IT WAS INSTALLED, which it should not have been',
+    });
+
+    let installed = null;
+    try {
+      installed = await extensions.installFromPath(drawingComfort);
+    } catch (e) {
+      installed = { error: e.message };
+    }
+    results.push({
+      check: 'an allowlisted extension installs from its reviewed files',
+      value: installed?.error ? `REFUSED: ${installed.error}` : `${installed.name} ${installed.version}`,
+    });
+    await sleep(1500);
+    const trayTitles = await limit(shell.chromeView.webContents.executeJavaScript(
+      `[...document.querySelectorAll('#tray button')].map(b => b.title)`), 5000, []);
+    results.push({
+      check: 'the installed extension reaches the tray',
+      value: Array.isArray(trayTitles) ? trayTitles : String(trayTitles),
+    });
+    results.push({ check: 'it is listed as installed and passing its checks', value: extensions.listInstalled() });
+  }
+
   // Closing a window with a popup open used to throw "Object has been destroyed" out of the
   // window's own 'closed' handler, which Electron surfaces as a main-process crash dialog.
   step('closing a window with an action popup open');

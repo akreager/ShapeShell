@@ -14,6 +14,7 @@
     "start": "bash scripts/run.sh .",
     "start:xwayland": "bash scripts/run.sh . --ozone-platform=x11",
     "gpu-check": "bash scripts/gpu-check.sh",
+    "test-extensions": "node scripts/test-extensions.js",
     "ext-survey": "bash scripts/ext-survey.sh",
     "smoke-launch": "bash scripts/smoke-launch.sh",
     "smoke-extensions": "bash scripts/run-node-script.sh scripts/smoke-extensions.js",

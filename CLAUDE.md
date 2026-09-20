@@ -6,7 +6,7 @@ Full spec/handoff: [onshapeAppliance.md](onshapeAppliance.md). This file is the 
 
 **Status: milestones 1-5 complete. Flatpak is the only supported format.** Hardware WebGL verified, custom window chrome, and live 6-DOF SpaceMouse navigation driving the Onshape viewport — see [Milestone 1 results](#milestone-1-results) and [Bridge integration](#bridge-integration). Milestone 4 needed no work: Onshape dropped its platform sniff. **Next: the Stream Deck integration**, once the owner has the Stream Deck working on Linux independently.
 
-**Extension support is in progress on `feature/extensions`**: allowlisted Chrome extensions (Bitwarden first), a toolbar tray, and popups. Phases 0-1 are done — the tray, action popups and `chrome.action` routing work, and extensions load from `SHAPESHELL_DEV_EXTENSIONS` (dev only) until the install path lands. The plan and all measured results live in [docs/extensions-plan.md](docs/extensions-plan.md); `npm run ext-survey` re-measures Electron's API gaps, `npm run smoke-extensions` is the tray/popup regression test, and `npm run smoke-launch` proves `npm start` still puts a window on screen.
+**Extension support is in progress on `feature/extensions`**: allowlisted Chrome extensions (Bitwarden first), a toolbar tray, and popups. Phases 0-3 are done: the tray, action popups, a window and tab model for extensions that Electron does not provide, and an allowlisted install pipeline (menu: Install Extension…). Bitwarden works end to end — login, 2FA, unlock and autofill — verified on this machine. `SHAPESHELL_DEV_EXTENSIONS` still side-loads from source for development. The plan and all measured results live in [docs/extensions-plan.md](docs/extensions-plan.md); `npm run test-extensions` covers the CRX, zip and allowlist code, `npm run smoke-extensions` is the tray/popup/API regression test, `npm run smoke-launch` proves `npm start` still puts a window on screen, and `npm run ext-survey` re-measures Electron's API gaps.
 
 **Naming (2026-09-19).** Renamed from "Onshape Appliance" to **ShapeShell**, app ID `io.github.akreager.ShapeShell`, ahead of a public release on GitHub (`akreager/ShapeShell`). The old name and Onshape's own logo as the icon were trademark risks and would be rejected by Flathub; `com.allen.*` also implied a domain the owner doesn't control. The app ID determines where user data lives (`~/.var/app/<id>/` in Flatpak, `~/.config/ShapeShell/` from source), so it must not change again after people install it. The icon is an original isometric cube with RGB faces (`build/icon.svg`, rasterised by `npm run icons`); it replaced Onshape's logo, which remains in this repo's earlier git history — one reason the public GitHub repo starts from a fresh single commit. The SVG carries an Anthropic-signed C2PA provenance manifest (no personal data); editing the SVG invalidates that signature.
 
@@ -29,8 +29,10 @@ ShapeShell/
 ├── src/
 │   ├── main.js              # Electron main process
 │   ├── chrome/              # toolbar.html, popover.html, preload.js
-│   ├── extensions/          # manager.js (loading + chrome.action state), popup.js
-│   │                        #   (action popup host), preload.js (in-extension shim)
+│   ├── extensions/          # manager.js (loading + chrome.action state), api-host.js
+│   │                        #   (tabs/windows/webNavigation), popup.js (action popup host),
+│   │                        #   preload.js (in-extension shim), install.js + allowlist.js
+│   │                        #   + allowlist.json + crx.js + zip.js (install pipeline)
 │   ├── bridge.js            # spawns/stops the bridge, pins its TLS cert
 │   └── window-state.js      # window bounds persistence
 ├── resources/

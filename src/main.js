@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BaseWindow, WebContentsView, Menu, session, shell, ipcMain } = require('electron');
+const { app, BaseWindow, WebContentsView, Menu, dialog, session, shell, ipcMain } = require('electron');
 const path = require('node:path');
 const windowState = require('./window-state');
 const bridge = require('./bridge');
@@ -305,6 +305,38 @@ function createShellWindow({ adoptedContents = null, url = START_URL, persistBou
   return shellRef;
 }
 
+// The only way to add an extension. Whatever is chosen still has to pass the allowlist in
+// src/extensions/allowlist.json — being picked here grants nothing.
+async function installExtension(shellRef) {
+  closeMenu(shellRef);
+  // In the Flatpak this goes through the xdg-desktop-portal file chooser, which is why the
+  // app needs no home-directory access to install an extension.
+  const { canceled, filePaths } = await dialog.showOpenDialog(shellRef.win, {
+    title: 'Install extension',
+    message: 'Choose a .crx file, or an unpacked extension folder',
+    properties: ['openFile', 'openDirectory', 'dontAddToRecent'],
+    filters: [{ name: 'Chrome extension', extensions: ['crx'] }],
+  });
+  if (canceled || filePaths.length === 0) return;
+
+  try {
+    const result = await extensions.installFromPath(filePaths[0]);
+    await dialog.showMessageBox(shellRef.win, {
+      type: 'info',
+      message: `${result.name} ${result.version} installed`,
+      detail: 'It is available from the toolbar now, and will load on every launch.',
+    });
+  } catch (e) {
+    const reasons = e instanceof extensions.RefusedError ? e.reasons.join('\n') : e.message;
+    console.error('[extensions] install refused:', reasons);
+    await dialog.showMessageBox(shellRef.win, {
+      type: 'error',
+      message: 'That extension was not installed',
+      detail: `${reasons}\n\nShapeShell installs only extensions on its built-in allowlist, in the exact builds it has reviewed.`,
+    });
+  }
+}
+
 // Resolves the shell an IPC message belongs to, and rejects anything not sent by that
 // window's own toolbar frame.
 function shellFor(event) {
@@ -383,6 +415,7 @@ function registerIpc() {
       case 'reload': contents.reload(); break;
       case 'home': contents.loadURL(DOCUMENTS_URL); break;
       case 'newWindow': createShellWindow().win.show(); break;
+      case 'installExtension': installExtension(shellRef); return;
       case 'quit': app.quit(); return;
       default: return;
     }

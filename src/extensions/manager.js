@@ -6,14 +6,16 @@
 // on every boot. So this module loads them on startup, and our own preload reports every
 // action call (badge, title, icon, popup) here, where the toolbar tray can render it.
 //
-// Phase 1 loads only from SHAPESHELL_DEV_EXTENSIONS, and only when running from source. The
-// allowlist and the real install pipeline are phase 3 — see docs/extensions-plan.md.
+// Extensions come from two places: those installed through the allowlist (checked again on
+// every launch, since Electron forgets them), and, when running from source only,
+// SHAPESHELL_DEV_EXTENSIONS for development. See docs/extensions-plan.md.
 
 const { app, ipcMain } = require('electron');
 const EventEmitter = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
 const apiHost = require('./api-host');
+const installer = require('./install');
 
 const PRELOAD = path.join(__dirname, 'preload.js');
 // Extension contexts report action state on these; nothing else may send them.
@@ -32,6 +34,7 @@ const STORAGE_CHANGED_CHANNEL = 'shapeshell-ext:storage-changed';
 const emitter = new EventEmitter();
 const state = new Map(); // extension id -> { extension, action }
 let extSession = null;
+let extensionsDir = null;
 
 function log(...args) {
   console.log('[extensions]', ...args);
@@ -164,6 +167,7 @@ async function loadUnpacked(dir) {
 
 async function init(ses) {
   extSession = ses;
+  extensionsDir = path.join(app.getPath('userData'), 'Extensions');
 
   // Runs inside every extension service worker before its own script, which is what lets
   // Bitwarden start at all: it reads chrome.webNavigation at the top level, and Electron has
@@ -211,6 +215,25 @@ async function init(ses) {
     if (event.sender.session === extSession) broadcastStorageChange(extId, area, changes);
   });
 
+  // Installed extensions are re-checked here, not just at install time: an app update can
+  // drop an entry from the allowlist, and files can change on disk.
+  let installed = { ready: [], skipped: [] };
+  try {
+    installed = installer.verifyInstalled(extensionsDir);
+  } catch (e) {
+    log(`the allowlist could not be read, so no installed extension will load: ${e.message}`);
+  }
+  for (const { key, reasons } of installed.skipped) {
+    log(`NOT loading ${key}: ${reasons.join('; ')}`);
+  }
+  for (const { path: dir, record } of installed.ready) {
+    try {
+      await loadUnpacked(dir);
+    } catch (e) {
+      log(`FAILED to load ${record.name}: ${e.message}`);
+    }
+  }
+
   for (const dir of devExtensionPaths()) {
     try {
       await loadUnpacked(dir);
@@ -218,6 +241,38 @@ async function init(ses) {
       log(`FAILED to load ${dir}: ${e.message}`);
     }
   }
+}
+
+// Checks a .crx file or unpacked folder against the allowlist and, if it passes, installs and
+// loads it. Throws installer.RefusedError with readable reasons when it does not.
+async function installFromPath(source) {
+  const result = installer.install(source, extensionsDir);
+  const extension = await loadUnpacked(result.path);
+  log(`installed ${result.name} ${result.version}`);
+  return { ...result, extension };
+}
+
+function listInstalled() {
+  try {
+    const { ready, skipped } = installer.verifyInstalled(extensionsDir);
+    return {
+      ready: ready.map(({ record }) => ({ key: record.id || record.slug, name: record.name, version: record.version })),
+      skipped,
+    };
+  } catch (e) {
+    return { ready: [], skipped: [{ key: 'allowlist', reasons: [e.message] }] };
+  }
+}
+
+function uninstall(key) {
+  const entry = [...state.values()].find(e => e.extension.path.startsWith(path.join(extensionsDir, key) + path.sep));
+  if (entry) {
+    extSession.extensions.removeExtension(entry.extension.id);
+    state.delete(entry.extension.id);
+  }
+  installer.uninstall(extensionsDir, key);
+  emitter.emit('changed');
+  log(`uninstalled ${key}`);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -423,6 +478,10 @@ module.exports = {
   attachWindow,
   detachWindow,
   emitToExtension,
+  installFromPath,
+  listInstalled,
+  uninstall,
+  RefusedError: installer.RefusedError,
   get,
   preloadPath: PRELOAD,
   onChange: (fn) => { emitter.on('changed', fn); return () => emitter.off('changed', fn); },

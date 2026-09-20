@@ -39,7 +39,7 @@ Each phase ends with something runnable. None of them touch `main` until the fea
 0. ~~**API survey.**~~ DONE. `npm run ext-survey`; results below. It ran in a throwaway profile rather than `persist:onshape`, so the survey can never disturb a real sign-in.
 1. ~~**Tray and popup host.**~~ DONE; results below. Still outstanding from this phase, because it needs a signed-in session: the drawing-editor content scripts and `all_frames` on the `production-drawing-*` iframe.
 2. **Bitwarden compatibility.** Implementations built and tested against a fixture; login, unlock and autofill against a real vault are still to confirm. See [Phase 2 results](#phase-2-results).
-3. **Install pipeline and allowlist.** CRX3 parse and signature check, unpacked tree hash, manifest subset checks, safe unpacking (zip-slip, symlinks, size caps), and a re-check on every launch.
+3. ~~**Install pipeline and allowlist.**~~ DONE; results below. The menu can install; the management UI is phase 4.
 4. **Management UI.** List, pin, remove, and a clear message when an install is refused.
 5. **Flatpak.** Portal chooser, persistence under `~/.var/app/…`, and no new finish-args.
 
@@ -180,11 +180,33 @@ Two known limits: content scripts get no preload, so writes made there notify no
 
 Still open: the inline autofill menu (the small icon Chrome shows inside a login field) does not appear. Bitwarden injects it as iframes from `web_accessible_resources` declared with `use_dynamic_url: true`, which is the first thing to check. Not required — the toolbar button fills correctly — so it is worth a diagnostic probe before any work.
 
+## Phase 3 results
+
+Built 2026-09-20. `npm run test-extensions` is the test suite: plain Node, no Electron, 41 checks. It builds its own fixtures — a real RSA key, real signatures, real zips — so tampering and malicious archives are tested honestly rather than simulated, and every refusal has its own test.
+
+Four modules, no new dependencies:
+
+- **`crx.js`** parses CRX3, derives the extension id from the signing key, and verifies the signature. It accepts only a proof whose key derives the id the file declares, so a valid signature from an unrelated key proves nothing. It carries a small protobuf reader, since the header is a protobuf.
+- **`zip.js`** is a deliberately strict archive reader: stored and deflated entries only, no zip64, no encryption, and refusals for absolute paths, traversal, backslashes, NUL bytes, symlinks, oversized files and CRC mismatches. Written rather than pulled in, because it parses attacker-influenced bytes and a dependency here would be a far larger surface than the allowlist is meant to permit.
+- **`allowlist.js`** loads the shipped list, hashes trees (path plus content, sorted, so it is stable), and checks a manifest against its entry: MV3 only, a minimum version, and permissions, optional permissions, host permissions and content-script matches all subsets of what the entry approves.
+- **`install.js`** runs identify → allowlist → pinned hash → signature → manifest policy → unpack into staging → rename into place → write a marker. `verifyInstalled` re-runs the checks on every launch.
+
+Decisions made while building it:
+
+- **An unpacked folder is identified by its contents, not its folder name.** A clone can be called anything, so the tree hash decides which entry it is, and that entry supplies the name it installs under.
+- **The marker records the tree hash of what actually landed on disk**, because a CRX's file hash cannot be rechecked once unpacked. Every launch re-hashes the installed files, so a modified install does not load.
+- **The marker sits beside the version directory, not inside it**, so it cannot disturb the hash it records, and it is written after the rename so it never describes a half-written tree.
+- **Signature before pin:** a corrupt file should say it is corrupt, not that it was never reviewed.
+
+Verified beyond the unit tests: the real Bitwarden CRX installs against the shipped allowlist and derives its true Web Store id (`nngceckbapebfimnlniiiahkandclblb`), the real Drawing Comfort folder installs identified purely by its contents, and changing one byte of either makes it refuse. The smoke test covers the whole path in a running window — an unlisted extension refused, an allowlisted one installed, loaded and drawn in the tray.
+
+The hamburger menu has **Install Extension…**, which opens a file chooser (the xdg-desktop-portal one under Flatpak, so no home access is needed) and reports refusals with their reasons.
+
 ## Decisions
 
+- **An extension's id is left path-derived; the store key is not injected (2026-09-20).** Bitwarden's login, 2FA, unlock and autofill all work with an id derived from its install path, so nothing depends on the Web Store id at runtime. The installed path is fixed under the app's data directory, so the id is stable across launches and updates.
 - **The allowlist ships with the app; there are no user-added entries (2026-09-19).** Extensions arrive only through ShapeShell releases. We expect few users, and fewer still who need a particular extension, so the friction is acceptable. If demand grows, we can add user entries later behind deliberately discouraging warnings.
 
 ## Open questions
 
-- **Does Bitwarden need its store ID at runtime?** Unpacked, its ID is derived from the install path: stable for one install, but different from the store's `nngceckbapebfimnlniiiahkandclblb`. The survey never signed in, so this is untested. Login, SSO, 2FA and passkeys in phase 2 are where a dependency would show up. If one does, the install can write the CRX's own public key into `manifest.json` as `key`. That is a deterministic change, so the integrity check would compare against the pristine hash plus that one field.
 - **Drawing Comfort's pin.** It is 0BSD and changes often ("V2 Experimental"). We pin a tree hash at a reviewed commit, or ask the author about a store listing with a stable `key`.

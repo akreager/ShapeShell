@@ -1,0 +1,81 @@
+{
+  "comment": [
+    "Extensions ShapeShell will install, and the exact builds it will accept.",
+    "This list ships inside the app and is not user-editable: an extension arrives only",
+    "through a ShapeShell release, so every entry here is one someone reviewed. Adding a",
+    "build means adding its hash and cutting a release, which is deliberate friction.",
+    "",
+    "crxSha256 pins a .crx file's bytes; treeSha256 pins the contents of an unpacked",
+    "folder (see allowlist.js hashTree). Both are arrays so an entry can accept more than",
+    "one reviewed build, such as an old and a new version during an upgrade.",
+    "",
+    "permissions, optionalPermissions, hostPermissions and contentScriptMatches are the",
+    "maximum the manifest may ask for. A manifest asking for anything else is refused.",
+    "Optional permissions are listed only so they can be recognised: ShapeShell always",
+    "refuses chrome.permissions.request, so they are never actually granted."
+  ],
+  "version": 1,
+  "extensions": [
+    {
+      "id": "nngceckbapebfimnlniiiahkandclblb",
+      "slug": "bitwarden",
+      "name": "Bitwarden Password Manager",
+      "source": "https://chromewebstore.google.com/detail/nngceckbapebfimnlniiiahkandclblb",
+      "reviewed": "2026-09-20, version 2026.8.0",
+      "notes": "Broad host access is inherent to a password manager: it fills forms on any site, and Onshape sign-in passes through other hosts. Verified working in ShapeShell: login, 2FA, unlock and autofill.",
+      "minVersion": "2026.8.0",
+      "crxSha256": [
+        "d1a5942d9c234d03382da99279932055064caae7a32cc9b157940c863165d59f"
+      ],
+      "permissions": [
+        "activeTab",
+        "alarms",
+        "clipboardRead",
+        "clipboardWrite",
+        "contextMenus",
+        "idle",
+        "offscreen",
+        "scripting",
+        "sidePanel",
+        "storage",
+        "tabs",
+        "unlimitedStorage",
+        "webNavigation",
+        "webRequest",
+        "webRequestAuthProvider",
+        "notifications"
+      ],
+      "optionalPermissions": [
+        "nativeMessaging",
+        "privacy"
+      ],
+      "hostPermissions": [
+        "https://*/*",
+        "http://*/*"
+      ],
+      "contentScriptMatches": [
+        "*://*/*",
+        "file:///*"
+      ]
+    },
+    {
+      "id": null,
+      "slug": "onshape-drawing-comfort",
+      "name": "Onshape Drawing Comfort",
+      "source": "https://github.com/SamDomiono/Onshape-Drawing-Comfort-Dark-Mode",
+      "reviewed": "2026-09-20, commit 8bda244, version 0.2.0",
+      "notes": "GitHub only and 0BSD licensed, so it has no key and no stable extension id; it is pinned by the hash of its files. Dark-mode palettes for the drawing editor. Storage only, and scoped to onshape.com.",
+      "treeSha256": [
+        "ae86fd333e85e798ab3ebe90e33fe4103bbfa287e3cb6e6fd4d70102cda3ae3f"
+      ],
+      "permissions": [
+        "storage"
+      ],
+      "optionalPermissions": [],
+      "hostPermissions": [],
+      "contentScriptMatches": [
+        "https://*.onshape.com/*"
+      ]
+    }
+  ]
+}
