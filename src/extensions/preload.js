@@ -317,7 +317,8 @@ contextBridge.executeInMainWorld({
     });
 
     try {
-      host.ready(extId, `${isWorker ? 'worker' : location.pathname}: added ${added.join(', ') || 'nothing'}; replaced ${replaced.join(', ') || 'nothing'}`);
+      const unique = (list) => [...new Set(list)].join(', ') || 'nothing';
+      host.ready(extId, `${isWorker ? 'worker' : location.pathname}: added ${unique(added)}; replaced ${unique(replaced)}`);
     } catch { /* ignore */ }
   },
 });

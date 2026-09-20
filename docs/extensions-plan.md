@@ -172,6 +172,12 @@ Implemented: the preload wraps `set`, `remove` and `clear` on every storage area
 
 Two known limits: content scripts get no preload, so writes made there notify nobody; and every write now costs an extra read to compute `oldValue`.
 
+**Confirmed fixed (2026-09-20): the tray icon now follows Bitwarden's lock state**, including the logged-out grey icon and the badge count. `chrome.storage.onChanged` was the whole story.
+
+**Crash on closing a window with a popup open (2026-09-20).** `ExtensionPopup.close()` also runs from the window's own `closed` handler, where the window and its child views are already gone; removing the view then threw `Object has been destroyed` out of an event handler, which Electron shows as a main-process crash dialog. It now skips the teardown when the window is already destroyed, and `layout` and the dismissal watchers guard the same way. The smoke test opens a second window with a popup showing and closes it, verified to throw on the old code.
+
+`SMOKE_SKIP_IDLE=1` skips the 120-second idle-worker wait while iterating; the full run keeps it.
+
 Still open: the inline autofill menu (the small icon Chrome shows inside a login field) does not appear. Bitwarden injects it as iframes from `web_accessible_resources` declared with `use_dynamic_url: true`, which is the first thing to check. Not required — the toolbar button fills correctly — so it is worth a diagnostic probe before any work.
 
 ## Decisions

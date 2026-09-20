@@ -40,6 +40,7 @@ class ExtensionPopup {
   // losing focus. Clicking the popup's own tray icon lands here first, which is what makes a
   // second click on that icon close it rather than reopen it (see toggle).
   watchForDismissal() {
+    if (this.win.isDestroyed()) return;
     const onInput = (_event, input) => { if (input.type === 'mouseDown') this.close(); };
     const onWindowBlur = () => this.close();
     const views = [this.contentView, this.chromeView].filter(v => v && !v.webContents.isDestroyed());
@@ -144,13 +145,18 @@ class ExtensionPopup {
     this.lastClosed = { extId: this.extId, at: Date.now() };
     this.view = null;
     this.extId = null;
-    this.win.contentView.removeChildView(view);
-    if (!view.webContents.isDestroyed()) view.webContents.close();
+    // This also runs from the window's own 'closed' handler, where the window and its child
+    // views are already gone: touching them then throws "Object has been destroyed" out of
+    // an event handler, which Electron reports as a main-process crash dialog.
+    if (!this.win.isDestroyed()) {
+      this.win.contentView.removeChildView(view);
+      if (!view.webContents.isDestroyed()) view.webContents.close();
+    }
     this.onClosed();
   }
 
   layout() {
-    if (!this.view) return;
+    if (!this.view || this.win.isDestroyed()) return;
     const { width: winW, height: winH } = this.win.contentView.getBounds();
     const width = Math.min(this.size.width, Math.max(MIN_WIDTH, winW - 2 * MARGIN));
     const height = Math.min(this.size.height, Math.max(MIN_HEIGHT, winH - this.toolbarHeight - 2 * MARGIN));

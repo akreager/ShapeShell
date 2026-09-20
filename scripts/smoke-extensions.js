@@ -218,6 +218,11 @@ app.whenReady().then(async () => {
     // Regression: an idle MV3 worker is stopped and restarted as a NEW instance. Handlers
     // attached per version id were lost on that restart, and every extension API call then
     // failed with "No handler registered" — autofill died until the app was restarted.
+    // The idle wait dominates the run time; SMOKE_SKIP_IDLE=1 skips it while iterating on
+    // other checks. It is on by default because it covers a bug seen in the field.
+    if (process.env.SMOKE_SKIP_IDLE === '1') {
+      results.push({ check: 'idle worker restart', value: 'SKIPPED (SMOKE_SKIP_IDLE=1)' });
+    } else {
     step('waiting for the API probe worker to go idle and stop (up to 120s)');
     const scope = `chrome-extension://${apiProbe.id}/`;
     const stoppedNow = () => workerStatus.get(scope) === 'stopped'
@@ -246,6 +251,7 @@ app.whenReady().then(async () => {
     });
     shell.extPopup.close();
     await sleep(500);
+    }
   }
 
   const withPopup = actions.find(a => a.hasPopup);
@@ -287,6 +293,27 @@ app.whenReady().then(async () => {
       value: { popupOpen: shell.extPopup.isOpen, menuVisible: shell.popoverView.getVisible() },
     });
   }
+
+  // Closing a window with a popup open used to throw "Object has been destroyed" out of the
+  // window's own 'closed' handler, which Electron surfaces as a main-process crash dialog.
+  step('closing a window with an action popup open');
+  const second = createShellWindow({ url: hostPage });
+  second.win.show();
+  await sleep(3000);
+  await limit(second.chromeView.webContents.executeJavaScript(
+    `[...document.querySelectorAll('#tray button')].find(b => b.title.startsWith('API probe'))?.click()`), 5000, 'click timed out');
+  await sleep(2500);
+  const popupWasOpen = second.extPopup.isOpen;
+  let closeError = null;
+  const onUncaught = (e) => { closeError = e.message; };
+  process.once('uncaughtException', onUncaught);
+  second.win.close();
+  await sleep(1500);
+  process.off('uncaughtException', onUncaught);
+  results.push({
+    check: 'closing a window with its action popup open does not throw',
+    value: closeError ? `THREW: ${closeError}` : popupWasOpen ? 'clean (popup was open)' : 'clean (but the popup was not open, so this proved little)',
+  });
 
   fs.writeFileSync(path.join(OUT, 'results.json'), JSON.stringify(results, null, 2));
   for (const r of results) console.log(`- ${r.check}: ${JSON.stringify(r.value)}`);

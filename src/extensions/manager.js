@@ -97,9 +97,8 @@ function noteListener(extId, name) {
 function applyActionPatch(extId, patch) {
   const entry = state.get(extId);
   if (!entry || !patch || typeof patch !== 'object') return;
-  // Action updates are rare and are exactly what the tray draws, so log each one: this is
-  // how an icon that fails to change gets diagnosed.
-  log(`action ${entry.extension.name}: ${JSON.stringify(patch)}`);
+  // Extensions re-send the same action state constantly (Bitwarden does it several times a
+  // second while syncing), so only a real change is logged or redrawn.
   const { title, popup, badgeText, badgeColor, enabled, icon } = patch;
   const next = { ...entry.action };
   if (typeof title === 'string') next.title = title;
@@ -125,6 +124,10 @@ function applyActionPatch(extId, patch) {
       log(`setIcon ignored for ${entry.extension.name}: ${e.message}`);
     }
   }
+  const changed = ['title', 'popup', 'badgeText', 'badgeColor', 'enabled', 'icon']
+    .filter(key => next[key] !== entry.action[key]);
+  if (changed.length === 0) return;
+  log(`action ${entry.extension.name}: ${changed.map(k => (k === 'icon' ? `icon=${icon}` : `${k}=${JSON.stringify(next[k])}`)).join(' ')}`);
   entry.action = next;
   emitter.emit('changed');
 }
