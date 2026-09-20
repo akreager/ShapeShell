@@ -161,7 +161,16 @@ The smoke test reproduces it: it waits for that extension's own worker to go idl
 
 **Every `chrome.action` update is now logged** (`[extensions] action <name>: {...}`), because a tray icon that fails to change is otherwise undiagnosable. `setIcon` via `imageData` is reported as unsupported instead of being dropped silently, and an unreadable or out-of-tree path is logged too.
 
-Under investigation: **Bitwarden's tray icon does not reliably follow lock and unlock.** The mechanism works (a fixture proves `setIcon({path: {...}})` reaches the tray, and Bitwarden's absolute `/images/icon19_locked.png` form resolves correctly), so the next step is to read the new action log during a real lock and unlock to see whether Bitwarden issues the call at all. Its badge service may be stalling on the same account-state timeout noted above.
+**`chrome.storage.onChanged` never fires in Electron — found 2026-09-20, and it was the reason Bitwarden's tray icon never showed "unlocked".** With the action log in place, Bitwarden was seen calling `setIcon` with `/images/icon38_locked.png` and nothing else, ever. Our tray was fine: driving Bitwarden's own call shapes through it (absolute path, relative path, size map) changed the icon every time. The extension simply believed the vault was still locked.
+
+Two candidates, tested in order:
+
+- **`chrome.storage.session` shared between contexts?** Yes, in both directions. Ruled out.
+- **`chrome.storage.onChanged` delivered across contexts?** No — a worker listening on `storage.onChanged`, `storage.local.onChanged` and `storage.session.onChanged` received **nothing** from writes made in the popup, or from its own. Extensions learn about shared state changes this way; Bitwarden's background finds out the vault was unlocked exactly here, which also explains the recurring `The account switch process did not complete in a reasonable amount of time`.
+
+Implemented: the preload wraps `set`, `remove` and `clear` on every storage area, reads the old values, performs the write, and reports the change to the main process, which broadcasts it to all of that extension's contexts — including the writer, as Chrome does. Both the global `storage.onChanged` and the per-area `storage.<area>.onChanged` are replaced, since Electron fires neither.
+
+Two known limits: content scripts get no preload, so writes made there notify nobody; and every write now costs an extra read to compute `oldValue`.
 
 Still open: the inline autofill menu (the small icon Chrome shows inside a login field) does not appear. Bitwarden injects it as iframes from `web_accessible_resources` declared with `use_dynamic_url: true`, which is the first thing to check. Not required — the toolbar button fills correctly — so it is worth a diagnostic probe before any work.
 

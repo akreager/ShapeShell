@@ -57,7 +57,38 @@ async function probe() {
 }
 
 probe();
+// chrome.storage.session is in-memory state shared by all of an extension's contexts. A
+// password manager keeps its unlocked-vault key there, so if the worker cannot see what the
+// popup wrote, the background believes the vault is still locked.
+chrome.storage.session.set({ fromWorker: 'worker-wrote-this' });
+
+// Does a write in another context notify this one? Bitwarden's background learns that the
+// vault was unlocked through exactly this, so if it never fires the icon stays locked.
+const storageEvents = [];
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    storageEvents.push({ via: 'storage.onChanged', area, keys: Object.keys(changes || {}) });
+  });
+} catch (e) { storageEvents.push({ via: 'storage.onChanged', error: e.message }); }
+try {
+  chrome.storage.local.onChanged.addListener((changes) => {
+    storageEvents.push({ via: 'storage.local.onChanged', area: 'local', keys: Object.keys(changes || {}) });
+  });
+} catch (e) { storageEvents.push({ via: 'storage.local.onChanged', error: e.message }); }
+try {
+  chrome.storage.session.onChanged.addListener((changes) => {
+    storageEvents.push({ via: 'storage.session.onChanged', area: 'session', keys: Object.keys(changes || {}) });
+  });
+} catch (e) { storageEvents.push({ via: 'storage.session.onChanged', error: e.message }); }
+
 chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   if (msg === 'probe-again') { probe().then(() => respond('done')); return true; }
+  if (msg === 'read-storage-events') { respond(storageEvents); return true; }
+  if (msg === 'read-session') {
+    chrome.storage.session.get(['fromWorker', 'fromPopup'])
+      .then(v => respond(v))
+      .catch(e => respond(`THREW: ${e.message}`));
+    return true;
+  }
   return undefined;
 });

@@ -10,6 +10,22 @@
   await attempt('contexts', () => chrome.runtime.getContexts({}));
   await attempt('getCurrentTab', () => chrome.tabs.getCurrent());
 
+  // Can the popup and the worker see each other's chrome.storage.session?
+  await attempt('sessionWrite', async () => {
+    await chrome.storage.session.set({ fromPopup: 'popup-wrote-this' });
+    return 'wrote';
+  });
+  await attempt('sessionReadInPopup', () => chrome.storage.session.get(['fromWorker', 'fromPopup']));
+  await attempt('sessionReadInWorker', () => chrome.runtime.sendMessage('read-session'));
+
+  // Write from this context, then ask the worker whether it was notified.
+  await attempt('storageNotify', async () => {
+    await chrome.storage.local.set({ popupPing: Date.now() });
+    await chrome.storage.session.set({ popupSessionPing: Date.now() });
+    await new Promise(r => setTimeout(r, 800));
+    return chrome.runtime.sendMessage('read-storage-events');
+  });
+
   // Ask the worker to probe again now: its startup run happened while the page was still
   // loading, so it saw no iframe and a url of "".
   try { await chrome.runtime.sendMessage('probe-again'); } catch (e) { out.probeAgain = `failed: ${e.message}`; }

@@ -27,6 +27,7 @@ const EVENT_CHANNEL = 'shapeshell-ext:event';
 // Extension contexts announce which events they actually listen to, so an event nobody
 // wants never wakes a sleeping worker.
 const LISTEN_CHANNEL = 'shapeshell-ext:listens';
+const STORAGE_CHANGED_CHANNEL = 'shapeshell-ext:storage-changed';
 
 const emitter = new EventEmitter();
 const state = new Map(); // extension id -> { extension, action }
@@ -80,6 +81,14 @@ function defaultAction(extension) {
 
 // chrome.action calls arrive from the extension's own contexts via our preload. Anything
 // referring to an extension we did not load is ignored.
+// A write in one context has to reach every other context of the same extension, which is
+// what Electron's missing storage.onChanged would have done.
+function broadcastStorageChange(extId, area, changes) {
+  if (!state.has(extId) || !changes || typeof changes !== 'object') return;
+  emitToExtension(extId, 'storage.onChanged', [changes, area]);
+  emitToExtension(extId, `storage.${area}.onChanged`, [changes]);
+}
+
 function noteListener(extId, name) {
   const entry = state.get(extId);
   if (entry && typeof name === 'string') entry.listeners.add(name);
@@ -175,6 +184,7 @@ async function init(ses) {
     worker.ipc.handle(INVOKE_CHANNEL, (_event, extId, method, args) => dispatch(null, extId, method, args));
     worker.ipc.on(READY_CHANNEL, (_event, extId, detail) => log(`worker ready: ${extId} ${detail || ''}`));
     worker.ipc.on(LISTEN_CHANNEL, (_event, extId, name) => noteListener(extId, name));
+    worker.ipc.on(STORAGE_CHANGED_CHANNEL, (_event, extId, area, changes) => broadcastStorageChange(extId, area, changes));
   };
   ses.serviceWorkers.on('running-status-changed', ({ versionId }) => attachWorker(versionId));
   // Covers a worker that is already running when an extension loads or reloads.
@@ -193,6 +203,9 @@ async function init(ses) {
   });
   ipcMain.on(LISTEN_CHANNEL, (event, extId, name) => {
     if (event.sender.session === extSession) noteListener(extId, name);
+  });
+  ipcMain.on(STORAGE_CHANGED_CHANNEL, (event, extId, area, changes) => {
+    if (event.sender.session === extSession) broadcastStorageChange(extId, area, changes);
   });
 
   for (const dir of devExtensionPaths()) {

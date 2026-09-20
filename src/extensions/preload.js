@@ -22,6 +22,7 @@ const CLICK_CHANNEL = 'shapeshell-ext:clicked';
 const INVOKE_CHANNEL = 'shapeshell-ext:invoke';
 const EVENT_CHANNEL = 'shapeshell-ext:event';
 const LISTEN_CHANNEL = 'shapeshell-ext:listens';
+const STORAGE_CHANGED_CHANNEL = 'shapeshell-ext:storage-changed';
 
 // The main world gets these functions, not ipcRenderer itself, so an extension can only ever
 // reach these verbs.
@@ -32,6 +33,7 @@ const bridge = {
   onClicked: (cb) => ipcRenderer.on(CLICK_CHANNEL, (_event, extId) => cb(extId)),
   onEvent: (cb) => ipcRenderer.on(EVENT_CHANNEL, (_event, name, args) => cb(name, args)),
   listens: (extId, name) => ipcRenderer.send(LISTEN_CHANNEL, extId, name),
+  storageChanged: (extId, area, changes) => ipcRenderer.send(STORAGE_CHANGED_CHANNEL, extId, area, changes),
 };
 
 contextBridge.executeInMainWorld({
@@ -186,6 +188,66 @@ contextBridge.executeInMainWorld({
     // Chromium's own getContexts hits a NOTREACHED on our popup views ("Unexpected view
     // type found: 0"), so this never calls into it.
     if (chrome.runtime) replace(chrome.runtime, 'getContexts', call('runtime.getContexts'));
+
+    // ---- chrome.storage change notifications -------------------------------------------
+    // Measured: Electron never fires storage.onChanged, in any context. Extensions use it to
+    // learn that another context changed shared state — Bitwarden's background finds out the
+    // vault was unlocked this way, and without it the toolbar icon stays locked forever and
+    // its account state times out.
+    //
+    // So every write is wrapped: read the old values, perform the write, then tell the main
+    // process, which broadcasts to all of this extension's contexts (including this one,
+    // as Chrome does).
+    //
+    // Limitation: content scripts get no preload, so writes made there notify nobody.
+    if (chrome.storage) {
+      replace(chrome.storage, 'onChanged', event('storage.onChanged'));
+      for (const areaName of ['local', 'session', 'sync', 'managed']) {
+        const area = chrome.storage[areaName];
+        if (!area) continue;
+        replace(area, 'onChanged', event(`storage.${areaName}.onChanged`));
+
+        for (const method of ['set', 'remove', 'clear']) {
+          const original = typeof area[method] === 'function' ? area[method].bind(area) : null;
+          if (!original) continue;
+          area[method] = function (arg, callback) {
+            const hasCallback = typeof callback === 'function' || (method === 'clear' && typeof arg === 'function');
+            const cb = typeof callback === 'function' ? callback : (method === 'clear' && typeof arg === 'function' ? arg : null);
+            const payload = method === 'clear' && typeof arg === 'function' ? undefined : arg;
+
+            const keys = method === 'set' ? Object.keys(payload || {})
+              : method === 'remove' ? (Array.isArray(payload) ? payload : [payload])
+                : null;
+
+            const run = (async () => {
+              let before = {};
+              try { before = await area.get(keys); } catch { /* best effort */ }
+              await original(...(method === 'clear' ? [] : [payload]));
+
+              const changes = {};
+              if (method === 'clear') {
+                for (const [k, v] of Object.entries(before || {})) changes[k] = { oldValue: v };
+              } else if (method === 'remove') {
+                for (const k of keys) if (before && k in before) changes[k] = { oldValue: before[k] };
+              } else {
+                for (const k of keys) {
+                  changes[k] = before && k in before
+                    ? { oldValue: before[k], newValue: payload[k] }
+                    : { newValue: payload[k] };
+                }
+              }
+              if (Object.keys(changes).length) {
+                try { host.storageChanged(extId, areaName, changes); } catch { /* shutting down */ }
+              }
+            })();
+
+            if (!cb) return run;
+            run.then(() => cb(), (e) => { console.error('[shapeshell] storage write failed', e); cb(); });
+            return undefined;
+          };
+        }
+      }
+    }
 
     // ---- namespaces Electron does not implement ----------------------------------------
     define(chrome, 'windows', {

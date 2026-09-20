@@ -203,6 +203,11 @@ app.whenReady().then(async () => {
     results.push({ check: 'worker: chrome.tabs events fired on reload', value: tabEvents.length ? [...new Set(tabEvents.map(e => e.event))] : 'none fired' });
     results.push({ check: 'popup: sees itself in runtime.getContexts', value: contexts.map(c => c.contextType) });
     results.push({ check: 'popup: tabs.getCurrent() is undefined, as a popup is not a tab', value: popup.getCurrentTab === undefined ? 'undefined' : popup.getCurrentTab });
+    // Shared in-memory state between contexts: where a password manager keeps the key that
+    // says the vault is unlocked.
+    results.push({ check: 'storage.session: popup sees its own write and the worker\'s', value: popup.sessionReadInPopup });
+    results.push({ check: 'storage.session: worker sees its own write and the popup\'s', value: popup.sessionReadInWorker });
+    results.push({ check: 'worker is notified of a write made in the popup (storage.onChanged)', value: popup.storageNotify });
     results.push({ check: 'popup: its window matches the worker\'s', value: popup.windowsGetCurrent?.id ? popup.windowsGetCurrent.id === worker.windowsGetCurrent?.id : 'popup reported no window' });
     // How autofill actually reaches a login form, including one inside an iframe.
     results.push({ check: 'worker: scripting.executeScript into the main frame', value: worker.injectMainFrame });
