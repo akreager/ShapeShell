@@ -21,6 +21,7 @@ const READY_CHANNEL = 'shapeshell-ext:ready';
 const CLICK_CHANNEL = 'shapeshell-ext:clicked';
 const INVOKE_CHANNEL = 'shapeshell-ext:invoke';
 const EVENT_CHANNEL = 'shapeshell-ext:event';
+const LISTEN_CHANNEL = 'shapeshell-ext:listens';
 
 // The main world gets these functions, not ipcRenderer itself, so an extension can only ever
 // reach these verbs.
@@ -30,6 +31,7 @@ const bridge = {
   invoke: (extId, method, args) => ipcRenderer.invoke(INVOKE_CHANNEL, extId, method, args),
   onClicked: (cb) => ipcRenderer.on(CLICK_CHANNEL, (_event, extId) => cb(extId)),
   onEvent: (cb) => ipcRenderer.on(EVENT_CHANNEL, (_event, name, args) => cb(name, args)),
+  listens: (extId, name) => ipcRenderer.send(LISTEN_CHANNEL, extId, name),
 };
 
 contextBridge.executeInMainWorld({
@@ -49,7 +51,12 @@ contextBridge.executeInMainWorld({
     const event = (name) => {
       const listeners = new Set();
       const api = {
-        addListener: (fn) => { listeners.add(fn); },
+        addListener: (fn) => {
+          // Telling the main process which events matter keeps it from starting a sleeping
+          // worker to deliver something nothing is listening for.
+          if (name && listeners.size === 0) { try { host.listens(extId, name); } catch { /* ignore */ } }
+          listeners.add(fn);
+        },
         removeListener: (fn) => { listeners.delete(fn); },
         hasListener: (fn) => listeners.has(fn),
         hasListeners: () => listeners.size > 0,
@@ -127,7 +134,14 @@ contextBridge.executeInMainWorld({
       forward('setBadgeBackgroundColor', d => ({ badgeColor: typeof d.color === 'string' ? d.color : undefined }));
       forward('setTitle', d => ({ title: String(d.title ?? '') }));
       forward('setPopup', d => ({ popup: String(d.popup ?? '') }));
-      forward('setIcon', d => ({ icon: typeof d.path === 'string' ? d.path : Object.values(d.path || {}).pop() }));
+      // path may be a single string or a size map (Bitwarden sends {19: ..., 38: ...}).
+      // imageData is the other form Chrome accepts and we do not support yet, so it is
+      // reported rather than silently dropped.
+      forward('setIcon', (d) => {
+        if (!d.path && d.imageData) return { iconUnsupported: 'imageData' };
+        const icon = typeof d.path === 'string' ? d.path : Object.values(d.path || {}).pop();
+        return { icon };
+      });
       forward('enable', () => ({ enabled: true }));
       forward('disable', () => ({ enabled: false }));
 

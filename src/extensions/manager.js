@@ -24,6 +24,9 @@ const CLICK_CHANNEL = 'shapeshell-ext:clicked';
 // over EVENT_CHANNEL. See src/extensions/api-host.js.
 const INVOKE_CHANNEL = 'shapeshell-ext:invoke';
 const EVENT_CHANNEL = 'shapeshell-ext:event';
+// Extension contexts announce which events they actually listen to, so an event nobody
+// wants never wakes a sleeping worker.
+const LISTEN_CHANNEL = 'shapeshell-ext:listens';
 
 const emitter = new EventEmitter();
 const state = new Map(); // extension id -> { extension, action }
@@ -77,9 +80,17 @@ function defaultAction(extension) {
 
 // chrome.action calls arrive from the extension's own contexts via our preload. Anything
 // referring to an extension we did not load is ignored.
+function noteListener(extId, name) {
+  const entry = state.get(extId);
+  if (entry && typeof name === 'string') entry.listeners.add(name);
+}
+
 function applyActionPatch(extId, patch) {
   const entry = state.get(extId);
   if (!entry || !patch || typeof patch !== 'object') return;
+  // Action updates are rare and are exactly what the tray draws, so log each one: this is
+  // how an icon that fails to change gets diagnosed.
+  log(`action ${entry.extension.name}: ${JSON.stringify(patch)}`);
   const { title, popup, badgeText, badgeColor, enabled, icon } = patch;
   const next = { ...entry.action };
   if (typeof title === 'string') next.title = title;
@@ -87,11 +98,18 @@ function applyActionPatch(extId, patch) {
   if (typeof badgeText === 'string') next.badgeText = badgeText.slice(0, 4);
   if (typeof badgeColor === 'string') next.badgeColor = badgeColor;
   if (typeof enabled === 'boolean') next.enabled = enabled;
-  // setIcon paths are relative to the extension root; imageData is not supported yet.
+  if (patch.iconUnsupported) {
+    log(`setIcon via ${patch.iconUnsupported} is not supported yet (${entry.extension.name}); the tray keeps its current icon`);
+  }
+  // setIcon paths are relative to the extension root, and may start with a slash.
   if (typeof icon === 'string' && icon) {
     try {
       const file = path.join(entry.extension.path, icon);
-      if (file.startsWith(entry.extension.path) && fs.existsSync(file)) {
+      if (!file.startsWith(entry.extension.path)) {
+        log(`setIcon path escapes the extension directory, ignored: ${icon}`);
+      } else if (!fs.existsSync(file)) {
+        log(`setIcon path not found, ignored: ${icon}`);
+      } else {
         next.icon = `data:image/png;base64,${fs.readFileSync(file).toString('base64')}`;
       }
     } catch (e) {
@@ -119,7 +137,14 @@ function devExtensionPaths() {
 async function loadUnpacked(dir) {
   const resolved = path.resolve(dir);
   const extension = await extSession.extensions.loadExtension(resolved);
-  state.set(extension.id, { extension, action: defaultAction(extension) });
+  state.set(extension.id, {
+    extension,
+    action: defaultAction(extension),
+    listeners: new Set(),
+    // A content-script-only extension has no worker to wake, and asking for one fails.
+    hasWorker: Boolean(extension.manifest?.background?.service_worker),
+    wakeFailed: false,
+  });
   log(`loaded ${extension.name} ${extension.version} (${extension.id}) from ${resolved}`);
   emitter.emit('changed');
   return extension;
@@ -149,6 +174,7 @@ async function init(ses) {
     worker.ipc.on(ACTION_CHANNEL, (_event, extId, patch) => applyActionPatch(extId, patch));
     worker.ipc.handle(INVOKE_CHANNEL, (_event, extId, method, args) => dispatch(null, extId, method, args));
     worker.ipc.on(READY_CHANNEL, (_event, extId, detail) => log(`worker ready: ${extId} ${detail || ''}`));
+    worker.ipc.on(LISTEN_CHANNEL, (_event, extId, name) => noteListener(extId, name));
   };
   ses.serviceWorkers.on('running-status-changed', ({ versionId }) => attachWorker(versionId));
   // Covers a worker that is already running when an extension loads or reloads.
@@ -164,6 +190,9 @@ async function init(ses) {
   });
   ipcMain.on(READY_CHANNEL, (event, extId, detail) => {
     if (event.sender.session === extSession) log(`page ready: ${extId} ${detail || ''}`);
+  });
+  ipcMain.on(LISTEN_CHANNEL, (event, extId, name) => {
+    if (event.sender.session === extSession) noteListener(extId, name);
   });
 
   for (const dir of devExtensionPaths()) {
@@ -211,12 +240,19 @@ function runningWorkers() {
 // hear about it.
 function emitToExtension(extId, name, args) {
   const entry = state.get(extId);
-  if (!entry) return;
+  // Nothing in this extension has asked for this event, so there is nothing to deliver and
+  // no reason to start a worker for it.
+  if (!entry || !entry.listeners.has(name)) return;
   const workers = runningWorkers().filter(w => w.scope && w.scope.startsWith(entry.extension.url));
-  if (workers.length === 0) {
+  if (workers.length === 0 && entry.hasWorker) {
     extSession.serviceWorkers.startWorkerForScope(entry.extension.url)
       .then(worker => worker.send(EVENT_CHANNEL, name, args))
-      .catch(e => log(`could not wake the worker for ${entry.extension.name}: ${e.message}`));
+      .catch((e) => {
+        // Once per extension: this used to log on every event of every navigation.
+        if (entry.wakeFailed) return;
+        entry.wakeFailed = true;
+        log(`could not wake the worker for ${entry.extension.name}: ${e.message}`);
+      });
   }
   for (const { worker } of workers) worker.send(EVENT_CHANNEL, name, args);
   for (const shellRef of apiHost.liveWindows()) {

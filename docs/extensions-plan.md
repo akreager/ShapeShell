@@ -157,6 +157,12 @@ Found while following that up:
 
 The smoke test reproduces it: it waits for that extension's own worker to go idle and stop, then uses the extension again. Waiting for *any* worker to stop was not enough — the other fixture's worker went idle first and the check passed against the broken code. Verified to fail on the old keying (the popup hangs at "running…", the same symptom seen in use) and to pass on the fix.
 
+**Waking a sleeping worker has to be selective (2026-09-20).** Waking one for every event flooded the log with `Failed to start service worker` for Drawing Comfort, which is content-script-only and has no worker at all. Now an extension is only woken if its manifest declares a service worker, only for events one of its contexts has actually registered a listener for (the preload reports each event name on first `addListener`), and a wake failure is logged once per extension rather than per event. This mirrors Chrome, which only wakes a worker for events the extension listens to.
+
+**Every `chrome.action` update is now logged** (`[extensions] action <name>: {...}`), because a tray icon that fails to change is otherwise undiagnosable. `setIcon` via `imageData` is reported as unsupported instead of being dropped silently, and an unreadable or out-of-tree path is logged too.
+
+Under investigation: **Bitwarden's tray icon does not reliably follow lock and unlock.** The mechanism works (a fixture proves `setIcon({path: {...}})` reaches the tray, and Bitwarden's absolute `/images/icon19_locked.png` form resolves correctly), so the next step is to read the new action log during a real lock and unlock to see whether Bitwarden issues the call at all. Its badge service may be stalling on the same account-state timeout noted above.
+
 Still open: the inline autofill menu (the small icon Chrome shows inside a login field) does not appear. Bitwarden injects it as iframes from `web_accessible_resources` declared with `use_dynamic_url: true`, which is the first thing to check. Not required — the toolbar button fills correctly — so it is worth a diagnostic probe before any work.
 
 ## Decisions
