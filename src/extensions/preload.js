@@ -74,7 +74,21 @@ contextBridge.executeInMainWorld({
       return undefined;
     };
     // A call into the main process, which owns the window and tab model.
-    const call = (method) => api((...args) => host.invoke(extId, method, args));
+    //
+    // A worker's first calls can land in the gap before the main process has attached its
+    // IPC handler to this (possibly just-restarted) worker, so a missing handler is retried
+    // briefly rather than failed outright. Anything else is a real error and propagates.
+    const invoke = async (method, args) => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          return await host.invoke(extId, method, args);
+        } catch (e) {
+          if (attempt >= 4 || !String(e?.message || e).includes('No handler registered')) throw e;
+          await new Promise(r => setTimeout(r, 100 * (attempt + 1)));
+        }
+      }
+    };
+    const call = (method) => api((...args) => invoke(method, args));
 
     const added = [];
     const define = (obj, key, value) => {

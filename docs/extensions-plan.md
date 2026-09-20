@@ -153,6 +153,10 @@ Found while following that up:
 - **`setIcon({path: {...}})` does reach the tray**, verified by a fixture that swaps icons on click — this is the call Bitwarden makes when the vault locks or unlocks. It ignores `tabId`, which is harmless when a window holds one tab.
 - **`Error: The account switch process did not complete in a reasonable amount of time.`** appears once at startup. It is Bitwarden's own 1-second timeout waiting for its account state to settle, not a missing API, and the vault works regardless. Watch it; do not chase it unless something actually misbehaves.
 
+**Bug found in the field and fixed (2026-09-20): autofill died after an idle period.** Every extension API call started failing with `No handler registered for 'shapeshell-ext:invoke'`, and Bitwarden reported `Autofill dispatch stopped: live-tab set could not be established`. An MV3 service worker is stopped when idle and restarted on demand, and **the restart produces a new `ServiceWorkerMain` instance under the same version id**. The IPC handlers were attached once per version id, so the restarted worker had no route to the main process. They are now keyed by a `WeakSet` of worker instances, calls retry briefly on a missing handler to cover the startup race, and a stopped worker is woken (`startWorkerForScope`) when an event needs delivering, which is what Chrome does.
+
+The smoke test reproduces it: it waits for that extension's own worker to go idle and stop, then uses the extension again. Waiting for *any* worker to stop was not enough — the other fixture's worker went idle first and the check passed against the broken code. Verified to fail on the old keying (the popup hangs at "running…", the same symptom seen in use) and to pass on the fix.
+
 Still open: the inline autofill menu (the small icon Chrome shows inside a login field) does not appear. Bitwarden injects it as iframes from `web_accessible_resources` declared with `use_dynamic_url: true`, which is the first thing to check. Not required — the toolbar button fills correctly — so it is worth a diagnostic probe before any work.
 
 ## Decisions

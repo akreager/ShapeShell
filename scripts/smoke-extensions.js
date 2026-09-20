@@ -69,6 +69,17 @@ function servePages() {
 
 app.whenReady().then(async () => {
   const ses = session.fromPartition(PARTITION);
+  // An MV3 worker stops when idle; the restart is what broke extension APIs in the field.
+  // Tracked per extension scope: waiting for "any worker" would be satisfied by a different
+  // extension's worker going idle, and the restart would never be exercised.
+  const workerStatus = new Map();
+  const workerTransitions = [];
+  ses.serviceWorkers.on('running-status-changed', ({ versionId, runningStatus }) => {
+    let scope = '';
+    try { scope = ses.serviceWorkers.getInfoFromVersionID(versionId)?.scope || ''; } catch { /* gone already */ }
+    workerStatus.set(scope || `version-${versionId}`, runningStatus);
+    workerTransitions.push(`${scope.replace('chrome-extension://', '').slice(0, 10)}#${versionId}:${runningStatus}`);
+  });
   await extensions.init(ses);
   registerIpc();
 
@@ -196,6 +207,38 @@ app.whenReady().then(async () => {
     // How autofill actually reaches a login form, including one inside an iframe.
     results.push({ check: 'worker: scripting.executeScript into the main frame', value: worker.injectMainFrame });
     results.push({ check: 'worker: scripting.executeScript into the iframe', value: worker.injectSubFrame ?? 'no subframe was found to inject into' });
+    shell.extPopup.close();
+    await sleep(500);
+
+    // Regression: an idle MV3 worker is stopped and restarted as a NEW instance. Handlers
+    // attached per version id were lost on that restart, and every extension API call then
+    // failed with "No handler registered" — autofill died until the app was restarted.
+    step('waiting for the API probe worker to go idle and stop (up to 120s)');
+    const scope = `chrome-extension://${apiProbe.id}/`;
+    const stoppedNow = () => workerStatus.get(scope) === 'stopped'
+      || !Object.values(ses.serviceWorkers.getAllRunning()).some(info => info.scope === scope);
+    const deadline = Date.now() + 120000;
+    while (Date.now() < deadline && !stoppedNow()) await sleep(2000);
+    const sawStop = stoppedNow();
+    step(`API probe worker stopped: ${sawStop}`);
+    results.push({ check: 'service worker transitions observed', value: workerTransitions.slice(-8) });
+
+    await limit(shell.chromeView.webContents.executeJavaScript(
+      `[...document.querySelectorAll('#tray button')].find(b => b.title.startsWith('API probe')).click()`), 5000, 'click timed out');
+    await sleep(4000);
+    const afterRestart = shell.extPopup.isOpen
+      ? await limit(shell.extPopup.view.webContents.executeJavaScript(
+        'document.getElementById("out").textContent'), 8000, 'read timed out')
+      : 'popup did not open';
+    let restarted = {};
+    try { restarted = JSON.parse(afterRestart); } catch { restarted = { parseError: String(afterRestart).slice(0, 200) }; }
+    const restartedTab = Array.isArray(restarted.worker?.activeCurrentWindow) ? restarted.worker.activeCurrentWindow[0] : null;
+    results.push({
+      check: sawStop
+        ? 'extension APIs still work after the idle worker stopped and restarted'
+        : 'extension APIs still work (worker never went idle within 90s, so this did not exercise a restart)',
+      value: restartedTab?.url ? `tab ${restartedTab.id} ${restartedTab.url}` : restarted.worker?.activeCurrentWindow ?? restarted,
+    });
     shell.extPopup.close();
     await sleep(500);
   }

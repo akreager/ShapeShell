@@ -134,17 +134,25 @@ async function init(ses) {
   // registered by a web origin — there it hits a location check and returns.
   ses.registerPreloadScript({ type: 'service-worker', id: 'shapeshell-extensions', filePath: PRELOAD });
 
-  // Service workers have their own IPC router, reachable only once the worker exists.
-  const attached = new Set();
-  ses.serviceWorkers.on('running-status-changed', ({ versionId }) => {
-    if (attached.has(versionId)) return;
+  // Service workers have their own IPC router, reachable only once the worker exists, and
+  // each router belongs to one ServiceWorkerMain instance.
+  //
+  // An MV3 worker stops when idle and restarts on demand, and the restart produces a NEW
+  // instance with no handlers — under the SAME version id. Keying this off the version id
+  // meant the restarted worker had no route to the main process, and every extension API
+  // call failed with "No handler registered". A WeakSet of instances is the correct key.
+  const attachedWorkers = new WeakSet();
+  const attachWorker = (versionId) => {
     const worker = ses.serviceWorkers.getWorkerFromVersionID(versionId);
-    if (!worker) return;
-    attached.add(versionId);
+    if (!worker || worker.isDestroyed() || attachedWorkers.has(worker)) return;
+    attachedWorkers.add(worker);
     worker.ipc.on(ACTION_CHANNEL, (_event, extId, patch) => applyActionPatch(extId, patch));
     worker.ipc.handle(INVOKE_CHANNEL, (_event, extId, method, args) => dispatch(null, extId, method, args));
     worker.ipc.on(READY_CHANNEL, (_event, extId, detail) => log(`worker ready: ${extId} ${detail || ''}`));
-  });
+  };
+  ses.serviceWorkers.on('running-status-changed', ({ versionId }) => attachWorker(versionId));
+  // Covers a worker that is already running when an extension loads or reloads.
+  for (const versionId of Object.keys(ses.serviceWorkers.getAllRunning())) attachWorker(Number(versionId));
 
   // Extension pages (popups) use the ordinary renderer IPC.
   ipcMain.on(ACTION_CHANNEL, (event, extId, patch) => {
@@ -197,12 +205,20 @@ function runningWorkers() {
 
 // Events go to every context of the extension: its worker, and any popup or window of ours
 // showing one of its pages.
+//
+// An idle MV3 worker is stopped, and Chrome wakes it for events the extension listens to.
+// Ours does the same: without it, an extension that slept through a navigation would never
+// hear about it.
 function emitToExtension(extId, name, args) {
   const entry = state.get(extId);
   if (!entry) return;
-  for (const { worker, scope } of runningWorkers()) {
-    if (scope && scope.startsWith(entry.extension.url)) worker.send(EVENT_CHANNEL, name, args);
+  const workers = runningWorkers().filter(w => w.scope && w.scope.startsWith(entry.extension.url));
+  if (workers.length === 0) {
+    extSession.serviceWorkers.startWorkerForScope(entry.extension.url)
+      .then(worker => worker.send(EVENT_CHANNEL, name, args))
+      .catch(e => log(`could not wake the worker for ${entry.extension.name}: ${e.message}`));
   }
+  for (const { worker } of workers) worker.send(EVENT_CHANNEL, name, args);
   for (const shellRef of apiHost.liveWindows()) {
     const view = shellRef.extPopup?.view;
     if (view && shellRef.extPopup.extId === extId && !view.webContents.isDestroyed()) {
