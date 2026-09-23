@@ -1,10 +1,10 @@
 # ShapeShell
 
-Chrome-less Electron shell for cad.onshape.com with a live 6-DOF SpaceMouse bridge baked in (no manual bridge process, no manual cert import, no Tampermonkey), distributed as a Flatpak, with a Stream Deck integration planned.
+Chrome-less Electron shell for cad.onshape.com with a live 6-DOF SpaceMouse bridge baked in (no manual bridge process, no manual cert import, no Tampermonkey), distributed as a Flatpak, with Stream Deck page switching via StreamController.
 
 Full spec/handoff: [onshapeAppliance.md](onshapeAppliance.md). This file is the condensed working reference — read the handoff for the "why" behind anything below.
 
-**Status: milestones 1-5 complete. Flatpak is the only supported format.** Hardware WebGL verified, custom window chrome, and live 6-DOF SpaceMouse navigation driving the Onshape viewport — see [Milestone 1 results](#milestone-1-results) and [Bridge integration](#bridge-integration). Milestone 4 needed no work: Onshape dropped its platform sniff. **Next: the Stream Deck integration**, once the owner has the Stream Deck working on Linux independently.
+**Status: all seven milestones complete. Flatpak is the only supported format.** Hardware WebGL verified, custom window chrome, and live 6-DOF SpaceMouse navigation driving the Onshape viewport — see [Milestone 1 results](#milestone-1-results) and [Bridge integration](#bridge-integration). Two of the seven needed no work at all: Onshape dropped its platform sniff (4), and StreamController already does the Stream Deck job against ShapeShell's `wm_class` (7) — see [docs/streamdeck.md](docs/streamdeck.md).
 
 **Naming (2026-09-19).** Renamed from "Onshape Appliance" to **ShapeShell**, app ID `io.github.akreager.ShapeShell`, ahead of a public release on GitHub (`akreager/ShapeShell`). The old name and Onshape's own logo as the icon were trademark risks and would be rejected by Flathub; `com.allen.*` also implied a domain the owner doesn't control. The app ID determines where user data lives (`~/.var/app/<id>/` in Flatpak, `~/.config/ShapeShell/` from source), so it must not change again after people install it. The icon is an original isometric cube with RGB faces (`build/icon.svg`, rasterised by `npm run icons`); it replaced Onshape's logo, which remains in this repo's earlier git history — one reason the public GitHub repo starts from a fresh single commit. The SVG carries an Anthropic-signed C2PA provenance manifest (no personal data); editing the SVG invalidates that signature.
 
@@ -18,7 +18,7 @@ Full spec/handoff: [onshapeAppliance.md](onshapeAppliance.md). This file is the 
 | Cert trust | `session.setCertificateVerifyProc` scoped to `127.51.68.120:8181` only | Never import the bridge's self-signed CA into the OS/browser trust store. |
 | ~~Loopback alias~~ | **DROPPED — not needed on Linux.** | The kernel installs a `local 127.0.0.0/8 dev lo` route, so *every* `127.x.x.x` address is bindable and routable with no configuration. Measured: bound `127.51.68.120:8181` and completed a round-trip with no alias present, and the bridge serves there unprivileged. The original assumption came from macOS, where only `127.0.0.1` is routed to `lo0`. This deletes the `pkexec` helper, the systemd unit and the whole privileged first-run step, and makes the app portable to any Linux machine. |
 | Packaging | **Flatpak only** (decided 2026-09-19); other formats are user-built and unsupported | Flatpak is the only format that keeps Chromium's sandbox, integrates the icon and launcher, and installs without sudo. `.deb` also works but needs sudo; AppImage runs unsandboxed on Ubuntu 24.04+. See [Packaging](#packaging-milestone-5). |
-| Stream Deck | Separate systemd `--user` daemon, not bundled into Electron | `python-elgato-streamdeck` → `ydotool` (Wayland-safe; `xdotool` is X11-only). Independent lifecycle from the browser shell. |
+| Stream Deck | **StreamController**, configured to match ShapeShell's `wm_class`. No daemon in this repo. | It already does HID access, key dispatch and focus-driven page switching on Wayland, and it is packaged. The superseded plan — a systemd `--user` daemon on `python-elgato-streamdeck` → `ydotool` — would have rebuilt all of that, worse. See [docs/streamdeck.md](docs/streamdeck.md). |
 
 ## Architecture
 
@@ -34,7 +34,8 @@ ShapeShell/
 │                             #   spacemouse-bridge, LICENSE, LICENSE.gorilla-websocket, PINNED_COMMIT
 ├── scripts/                  # env-repair, run, package, fetch-bridge, gpu-check, fix-sandbox
 ├── build/                    # icon.svg, icon.png, icons/NxN.png
-├── docs/evidence/            # milestone 1 GPU results, kept as a record
+├── docs/                     # streamdeck.md (Stream Deck setup);
+│   └── evidence/             #   milestone 1 GPU results, kept as a record
 └── package.json              # electron-builder config; the Flatpak manifest is generated from its `build.flatpak` block
 ```
 
@@ -67,7 +68,7 @@ Measured facts that the implementation depends on:
 - **`BaseWindow` has no `ready-to-show`** — that is BrowserWindow-only. Show on the toolbar's `did-finish-load`.
 - **Clicking the toolbar steals key focus from the content view and does not return it.** Every toolbar action must call `contentView.webContents.focus()` or Onshape stops receiving keystrokes.
 - **Never use `role:` menu items.** They carry baked-in accelerators (`Ctrl+R`, `F11`, `Ctrl+Q`, `Ctrl+Shift+I`) — exactly the keys deliberately left to Onshape — and they silently no-op under a `BaseWindow` host. A popped-up menu registers no accelerators; `registerAccelerator: false` makes that explicit.
-- **`app.setDesktopName()` is the only thing that sets the Wayland `app_id`.** `app.setName()` and `--class` are ignored under Ozone/Wayland. This matters for milestone 7's `StartupWMClass` and Stream Deck focus detection.
+- **`app.setDesktopName()` is the only thing that sets the Wayland `app_id`.** `app.setName()` and `--class` are ignored under Ozone/Wayland. Mutter copies `app_id` into `wm_class`, so this line is also what StreamController matches on — changing it breaks both `StartupWMClass` and Stream Deck page switching. See [docs/streamdeck.md](docs/streamdeck.md).
 - **Switch views with `setVisible()`, never `removeChildView()` + `addChildView()`** — a removed-then-readded view stays `hidden` at 0fps. Relevant if tabs ever land.
 - `hasShadow` stays default true, but not for the reason previously recorded: the shadow's *input region* extends ~10px beyond the window geometry, and that ring is the frameless resize grab area.
 - `titleBarStyle: 'hiddenInset'`, `transparent: true`, and `minimizable`/`maximizable`/`closable` are all no-ops or broken on Linux — don't reach for them.
@@ -186,14 +187,17 @@ This also explains the browser's behavior: a browser keeps you signed in because
 
 **Decision (2026-09-17): accepted as-is, not a bug to fix.** The only possible fix is to mirror the session cookies in memory and rewrite them with an explicit expiry on quit. It was declined deliberately: it would mean writing live auth cookies to disk, it only ever buys restarts inside the ~4-hour idle window, the first server response resets the cookie back to session scope, and Electron stores this cookie DB in **plaintext** (`value` populated, `encrypted_value` empty). Do not re-open this without a new reason.
 
-### Stream Deck daemon (separate component)
-- `python-elgato-streamdeck` reads button presses → maps to Onshape shortcuts → emits via `ydotool` (fallback `xdotool` on X11).
-- udev rule needed for non-root HID access: `SUBSYSTEMS=="usb", ATTRS{idVendor}=="0fd9", GROUP="users", TAG+="uaccess"` in `/etc/udev/rules.d/10-streamdeck.rules` — install separately; there is no first-run setup step any more.
-- v1 scope: single manually-selected "Onshape" profile page. Auto-switch-on-focus is a v2 stretch goal.
+### Stream Deck — StreamController, not a component of this repo
+
+Focus ShapeShell, the deck switches pages. StreamController does it by matching `wm_class` `io.github.akreager.ShapeShell`; verified end to end 2026-09-22. Nothing is built, shipped or spawned here — no daemon, no udev rule, no first-run step.
+
+Setup, the two silent failure modes that make it look broken, and the verification commands: **[docs/streamdeck.md](docs/streamdeck.md)**.
+
+The one fact that constrains this repo: **the window title is the constant `ShapeShell`** — Electron sets a `BaseWindow` title once from the app name, and unlike a `BrowserWindow` it never syncs the page title, because the content is a `WebContentsView`. So a title regex matches nothing useful, and every Onshape context looks identical to the matcher. Giving `pushState` a `win.setTitle()` is what per-element pages (Part Studio / Assembly / Drawing) would need.
 
 ## Build plan / milestones (in order)
 
-Reordered 2026-09-17: packaging moved ahead of the Stream Deck daemon. The daemon is a nice-to-have and is a separate service with its own lifecycle, whereas packaging is what makes the app installable and is the last hard requirement.
+Reordered 2026-09-17: packaging moved ahead of the Stream Deck work, which was a nice-to-have with its own lifecycle, whereas packaging is what makes the app installable and is the last hard requirement.
 
 1. ~~**Scaffold**~~ — DONE. Bare Electron app on cad.onshape.com with hardware WebGL confirmed. See [Milestone 1 results](#milestone-1-results).
 2. ~~**Bridge spawn**~~ — DONE. Built into `resources/bridge/` by `npm run fetch-bridge`, spawned and killed around the app lifecycle, supervised on unexpected exit. No loopback alias was needed.
@@ -201,7 +205,7 @@ Reordered 2026-09-17: packaging moved ahead of the Stream Deck daemon. The daemo
 4. ~~**Platform spoof**~~ — DONE by deletion. Onshape dropped its `navigator.platform` gate, so no CDP injection exists. Live 6-DOF motion confirmed driving the Onshape viewport.
 5. ~~**Packaging**~~ — DONE. Flatpak only; released as v0.1.0 on GitHub (2026-09-19). See [Packaging](#packaging-milestone-5).
 6. ~~**Polish**~~ — DONE. Original icon, `.desktop` entry whose `StartupWMClass` matches `app.setDesktopName`.
-7. **Stream Deck daemon** — separate repo/service; `python-elgato-streamdeck` → `ydotool`, a udev rule for non-root HID access, manual profile-switch shortcuts against the real Onshape shortcut map. Auto-switch-on-focus is a stretch goal. The Stream Deck MK.2 (`0fd9:0080`) is present on this machine.
+7. ~~**Stream Deck daemon**~~ — DONE by deletion (2026-09-22). StreamController does the whole job, including the auto-switch-on-focus that was only a stretch goal here, so no daemon, udev rule or shortcut map was written. Configured against ShapeShell's `wm_class` and verified on the Stream Deck MK.2 (`0fd9:0080`). See [docs/streamdeck.md](docs/streamdeck.md).
 
 ## Milestone 1 results
 
@@ -261,7 +265,7 @@ Each was measured on this machine. `--use-gl=desktop`, `--use-gl=egl`, `--use-an
 - [x] ~~AppImage runs on a clean VM~~ — moot; AppImage is unsupported
 - [x] Flatpak sandbox: bridge binds `127.51.68.120:8181` and Onshape reaches it (200 from the page)
 - [ ] Flatpak on a non-NVIDIA GPU, a non-GNOME desktop, and a non-Ubuntu distro — untested
-- [ ] Stream Deck udev rule grants access without root
+- [x] Stream Deck page switches on focus — `Auto changing page` in StreamController's log the moment ShapeShell takes focus. HID access is StreamController's concern, not ours
 - [x] ~~DevTools shortcut vs the CDP-attached spoof~~ — moot; there is no CDP debugger and no spoof
 
 ## Open risks
