@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Extensions</title>
+<style>
+  /* Neutral on purpose: this window should sit comfortably on GNOME, KDE or anything else,
+     so it borrows no desktop's ornaments. The system font, the system's light/dark choice
+     and natively drawn window buttons do the fitting in. The accent is fixed: Chromium on
+     Linux does not reliably map CSS AccentColor to the desktop theme. */
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f6f7; --surface: #ffffff; --fg: #1f1f22; --fg-dim: #6b6b72; --line: #dcdce0;
+    --hover: rgba(0, 0, 0, .06); --press: rgba(0, 0, 0, .11);
+    --accent: #2f6fdb; --ok: #2e7d4f; --warn: #a15c00; --err: #c0342b;
+    --err-bg: #fbeceb; --warn-bg: #fff4e0; --chrome: #e9e9ec; --radius: 6px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #252526; --surface: #2d2d30; --fg: #e4e4e4; --fg-dim: #8e8e94; --line: #434348;
+      --hover: rgba(255, 255, 255, .07); --press: rgba(255, 255, 255, .12);
+      --accent: #6ea0f0; --ok: #6cc58f; --warn: #e2a54a; --err: #f07a70;
+      --err-bg: #3a2523; --warn-bg: #3a2f1c; --chrome: #1e1e1f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--fg);
+    font: 13px/1.35 system-ui, sans-serif;
+    cursor: default;
+    user-select: none;
+  }
+  svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; fill: none; flex: none; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* The strip the native window buttons are drawn over; env() tracks their side and width. */
+  .titlebar {
+    flex: none;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--chrome);
+    padding-left: env(titlebar-area-x, 0px);
+    padding-right: calc(100vw - env(titlebar-area-width, 100vw) - env(titlebar-area-x, 0px));
+    font-weight: 600;
+    font-size: 12.5px;
+    -webkit-app-region: drag;
+  }
+
+  main { flex: 1; overflow: auto; padding: 12px; }
+  .intro { color: var(--fg-dim); margin: 0 0 10px; font-size: 12.5px; }
+  .list { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); list-style: none; margin: 0; padding: 0; }
+  .row { display: grid; grid-template-columns: 32px 1fr auto; gap: 4px 10px; align-items: center; padding: 8px 10px; border-top: 1px solid var(--line); }
+  .row:first-child { border-top: 0; }
+  .row:focus-within { background: var(--hover); }
+  .ico { width: 32px; height: 32px; border-radius: 6px; display: grid; place-items: center; overflow: hidden; }
+  .ico img { width: 24px; height: 24px; object-fit: contain; }
+  .ico .letter { width: 100%; height: 100%; display: grid; place-items: center; color: #fff; font-weight: 600; font-size: 15px; text-transform: uppercase; }
+  .name { font-weight: 600; min-width: 0; }
+  .name button { all: unset; display: inline-flex; align-items: center; gap: 4px; border-radius: 3px; }
+  .name button:hover { text-decoration: underline; }
+  .name button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .name button svg { width: 12px; height: 12px; color: var(--fg-dim); }
+  .sub { font-size: 12px; color: var(--fg-dim); margin-top: 2px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .badge { font-size: 11px; padding: 1px 6px; border-radius: 9px; border: 1px solid currentColor; line-height: 1.4; }
+  .b-ok { color: var(--ok); } .b-up { color: var(--accent); } .b-err { color: var(--err); } .b-warn { color: var(--warn); }
+  .actions { display: flex; gap: 2px; }
+  .ib { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: var(--radius); background: transparent; color: var(--fg); cursor: default; }
+  .ib:hover:not(:disabled) { background: var(--hover); }
+  .ib:active:not(:disabled) { background: var(--press); }
+  .ib:disabled { opacity: .35; }
+  .ib[aria-pressed="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  .ib.primary:not(:disabled) { color: var(--accent); }
+  .ib.danger:hover:not(:disabled) { color: var(--err); }
+  .progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 5px; }
+  .progress > i { display: block; height: 100%; background: var(--accent); }
+  .progress.indeterminate > i { width: 30%; animation: slide 1.2s ease-in-out infinite; }
+  @keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+  @media (prefers-reduced-motion: reduce) { .progress.indeterminate > i { animation: none; width: 100%; opacity: .5; } }
+  .msg { grid-column: 2 / 4; font-size: 12px; padding: 5px 8px; border-radius: 4px; display: flex; gap: 6px; align-items: flex-start; user-select: text; }
+  .msg.err { background: var(--err-bg); color: var(--err); }
+  .msg.warn { background: var(--warn-bg); color: var(--warn); }
+
+  footer { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
+  footer .lbl { font-size: 12px; color: var(--fg-dim); margin-right: auto; }
+  #status { flex-basis: 100%; margin: 0; font-size: 12px; user-select: text; }
+  #status:empty { display: none; }
+  #status.err { color: var(--err); }
+  .btn { font: inherit; font-size: 12.5px; padding: 5px 10px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); color: var(--fg); cursor: default; }
+  .btn:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 6%, var(--surface)); }
+  .btn:disabled { opacity: .5; }
+  .btn.link { border-color: transparent; background: transparent; color: var(--fg-dim); }
+  .btn.link:hover { color: var(--fg); background: var(--hover); }
+  /* A fixed deep red in both themes: white on the dark theme's lighter --err is too faint. */
+  .btn.danger { background: #c0342b; border-color: #c0342b; color: #fff; }
+  .btn.danger:hover:not(:disabled) { filter: brightness(1.08); }
+
+  dialog { width: 400px; max-width: calc(100vw - 32px); padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--fg); box-shadow: 0 10px 36px rgba(0, 0, 0, .45); }
+  dialog::backdrop { background: rgba(0, 0, 0, .4); }
+  dialog h2 { margin: 0 0 8px; font-size: 15px; display: flex; gap: 8px; align-items: center; }
+  dialog h2 svg { width: 22px; height: 22px; color: var(--warn); }
+  dialog p { margin: 0 0 8px; font-size: 12.5px; }
+  dialog ul { margin: 0 0 10px; padding-left: 18px; font-size: 12.5px; color: var(--fg-dim); }
+  dialog li + li { margin-top: 3px; }
+  .ack { display: flex; gap: 6px; align-items: flex-start; font-size: 12.5px; background: var(--warn-bg); padding: 7px 8px; border-radius: 4px; margin-bottom: 12px; }
+  .btns { display: flex; justify-content: flex-end; gap: 8px; }
+</style>
+</head>
+<body>
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-dl" viewBox="0 0 16 16"><path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M3 13h10"/></symbol>
+  <symbol id="i-up" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5V5h-2.5"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 16 16"><path d="M6 2h4M7 2v4L4.5 9h7L9 6V2M8 9v5"/></symbol>
+  <symbol id="i-rm" viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 16 16"><path d="M9 3h4v4M13 3 7.5 8.5M11 9.5V13H3V5h3.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 2 1.5 13.5h13z M8 6.5v3.2M8 11.6v.1"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M3 8.5 6.5 12 13 4.5"/></symbol>
+</svg>
+
+<div class="titlebar">Extensions</div>
+
+<main>
+  <p class="intro">Supported extensions have been tested with ShapeShell. Updates are never installed automatically. Pinned extensions appear in the toolbar.</p>
+  <ul class="list" id="list" aria-label="Extensions"></ul>
+</main>
+
+<footer>
+  <span class="lbl">Unsupported extensions:</span>
+  <button class="btn link" id="add-crx">Install .crx file…</button>
+  <button class="btn link" id="add-folder">Install unpacked folder…</button>
+  <p id="status" role="status" aria-live="polite"></p>
+</footer>
+
+<dialog id="dragons" aria-labelledby="dragons-title" aria-describedby="dragons-body">
+  <h2 id="dragons-title"><svg aria-hidden="true"><use href="#i-warn"/></svg>Install an unsupported extension?</h2>
+  <div id="dragons-body">
+    <p>This extension has not been tested with ShapeShell. <strong>It will very likely not work</strong>, and it may break things.</p>
+    <ul>
+      <li>ShapeShell supports only part of Chrome's extension API; missing features fail silently.</li>
+      <li>It can read and change Onshape pages, including your documents and sign-in.</li>
+      <li>If it misbehaves, remove it here. No support is offered for unsupported extensions.</li>
+    </ul>
+  </div>
+  <label class="ack"><input type="checkbox" id="ack"> I understand and want to continue anyway</label>
+  <div class="btns">
+    <button class="btn" id="dragons-cancel">Cancel</button>
+    <button class="btn danger" id="dragons-go" disabled>Choose file…</button>
+  </div>
+</dialog>
+
+<script>
+  const api = window.manageApi;
+  const list = document.getElementById('list');
+  const statusLine = document.getElementById('status');
+
+  const el = (tag, props = {}, ...children) => {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(props)) {
+      if (k === 'class') node.className = v;
+      else if (k.startsWith('aria-') || k.startsWith('data-')) node.setAttribute(k, v);
+      else node[k] = v;
+    }
+    node.append(...children.filter(c => c !== null && c !== undefined && c !== false));
+    return node;
+  };
+  const icon = (id) => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    use.setAttribute('href', `#${id}`);
+    svg.append(use);
+    return svg;
+  };
+  const iconButton = ({ role, key, symbol, label, onClick, disabled = false, pressed = null, variant = '' }) => {
+    const b = el('button', { class: `ib ${variant}`, title: label, 'aria-label': label, 'data-role': role, 'data-key': key, disabled }, icon(symbol));
+    if (pressed !== null) b.setAttribute('aria-pressed', String(pressed));
+    if (onClick) b.addEventListener('click', onClick);
+    return b;
+  };
+
+  const mb = n => (n / 1048576).toFixed(1);
+  // A stable colour per name for extensions with no loaded icon to show.
+  const tint = (name) => {
+    let h = 0;
+    for (const ch of name) h = (h * 31 + ch.codePointAt(0)) % 360;
+    return `hsl(${h} 45% 42%)`;
+  };
+
+  function progressText(op) {
+    if (op.phase === 'checking') return 'Checking…';
+    if (op.phase === 'installing') return 'Installing…';
+    return op.total ? `Downloading… ${mb(op.received)} of ${mb(op.total)} MB` : `Downloading… ${mb(op.received)} MB`;
+  }
+
+  function renderRow(r) {
+    const installed = Boolean(r.installedVersion);
+    const busy = Boolean(r.op);
+
+    const ico = el('div', { class: 'ico' });
+    if (r.icon) ico.append(el('img', { src: r.icon, alt: '' }));
+    else {
+      const letter = el('span', { class: 'letter' }, (r.name || '?').trim().charAt(0));
+      letter.style.background = tint(r.name || '?');
+      ico.append(letter);
+    }
+
+    const nameNode = r.hasSource
+      ? el('button', { title: `Open its ${r.sourceLabel} page in your browser`, 'data-role': 'source', 'data-key': r.key, onclick: () => api.openSource(r.key) }, r.name, icon('i-ext'))
+      : document.createTextNode(r.name);
+
+    const sub = el('div', { class: 'sub' });
+    if (busy) sub.append(el('span', {}, progressText(r.op)));
+    else if (!installed) {
+      sub.append(el('span', {}, r.latestVersion ? `Not installed · ${r.latestVersion}` : 'Not installed'));
+    } else {
+      sub.append(el('span', {}, r.installedVersion));
+      if (r.problem) sub.append(el('span', { class: 'badge b-err' }, 'Not loaded'));
+      else if (r.updateAvailable) sub.append(el('span', { class: 'badge b-up' }, `Update available · ${r.latestVersion}`));
+      else if (r.supported && r.latestVersion) sub.append(el('span', { class: 'badge b-ok' }, 'Up to date'));
+      if (!r.supported) sub.append(el('span', { class: 'badge b-warn' }, 'Unsupported'));
+    }
+
+    const text = el('div', {}, el('div', { class: 'name' }, nameNode), sub);
+    if (busy) {
+      const bar = el('div', { class: `progress${r.op.total ? '' : ' indeterminate'}`, role: 'progressbar', 'aria-label': `${r.name} ${progressText(r.op)}` });
+      const fill = el('i');
+      if (r.op.total) {
+        const pct = Math.min(100, Math.round((r.op.received / r.op.total) * 100));
+        fill.style.width = `${pct}%`;
+        bar.setAttribute('aria-valuenow', String(pct));
+        bar.setAttribute('aria-valuemin', '0');
+        bar.setAttribute('aria-valuemax', '100');
+      }
+      bar.append(fill);
+      text.append(bar);
+    }
+
+    // First button: install, update, cancel, or a disabled marker saying why not.
+    let first;
+    if (busy) {
+      first = iconButton({ role: 'primary', key: r.key, symbol: 'i-x', label: r.op.phase === 'installing' ? 'Installing' : 'Cancel', disabled: r.op.phase === 'installing', onClick: () => api.cancel(r.key) });
+    } else if (!installed) {
+      first = iconButton({ role: 'primary', key: r.key, symbol: 'i-dl', label: `Install ${r.name}`, variant: 'primary', disabled: !r.downloadable, onClick: () => api.install(r.key) });
+    } else if (r.updateAvailable && r.downloadable) {
+      first = iconButton({ role: 'primary', key: r.key, symbol: 'i-up', label: `Update to ${r.latestVersion}`, variant: 'primary', onClick: () => api.install(r.key) });
+    } else if ((r.error || r.problem) && r.downloadable) {
+      // Also the way back for an install that fails its checks: it is rewritten in place,
+      // so the extension keeps its id and its data.
+      first = iconButton({ role: 'primary', key: r.key, symbol: 'i-up', label: r.problem ? 'Reinstall' : 'Retry', variant: 'primary', onClick: () => api.install(r.key) });
+    } else if (!r.downloadable) {
+      first = iconButton({ role: 'primary', key: r.key, symbol: 'i-up', label: 'No update source: install a newer file with the buttons below', disabled: true });
+    } else {
+      first = iconButton({ role: 'primary', key: r.key, symbol: 'i-check', label: r.latestVersion ? 'Up to date' : 'Not checked yet', disabled: true });
+    }
+
+    const pinLabel = !installed ? 'Pin to toolbar (install first)'
+      : !r.loaded ? 'Pin to toolbar (not loaded)'
+      : !r.canPin ? 'This extension has no toolbar button'
+      : r.pinned ? 'Unpin from toolbar' : 'Pin to toolbar';
+    const pin = iconButton({ role: 'pin', key: r.key, symbol: 'i-pin', label: pinLabel, disabled: !r.canPin || busy, pressed: r.canPin ? r.pinned : null, onClick: () => api.pin(r.key, !r.pinned) });
+
+    const remove = iconButton({ role: 'remove', key: r.key, symbol: 'i-rm', label: installed ? `Remove ${r.name}` : 'Remove (not installed)', variant: 'danger', disabled: !installed || busy, onClick: () => api.remove(r.key) });
+
+    const li = el('li', { class: 'row', 'data-key': r.key }, ico, text, el('div', { class: 'actions' }, first, pin, remove));
+    if (r.error) li.append(el('div', { class: 'msg err', role: 'alert' }, icon('i-warn'), el('span', {}, r.error)));
+    else if (r.problem) li.append(el('div', { class: 'msg warn' }, icon('i-warn'), el('span', {}, `Not loaded: ${r.problem}`)));
+    return li;
+  }
+
+  // Rows are redrawn on every change, including download progress, so keyboard focus is
+  // carried across by what it was on rather than by element.
+  function render(rows) {
+    const active = document.activeElement;
+    const focus = list.contains(active) ? { key: active.dataset.key, role: active.dataset.role } : null;
+    list.replaceChildren(...rows.map(renderRow));
+    if (focus?.key) {
+      const target = list.querySelector(`[data-key="${CSS.escape(focus.key)}"][data-role="${CSS.escape(focus.role || '')}"]`);
+      if (target && !target.disabled) target.focus();
+      else list.querySelector(`li[data-key="${CSS.escape(focus.key)}"] button:not(:disabled)`)?.focus();
+    }
+  }
+
+  // Up/Down move between rows, keeping the same control; Left/Right move across a row.
+  list.addEventListener('keydown', (e) => {
+    const current = document.activeElement;
+    const row = current?.closest('li.row');
+    if (!row) return;
+    const controls = r => [...r.querySelectorAll('button')];
+    const mine = controls(row);
+    const index = mine.indexOf(current);
+    let target = null;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const step = e.key === 'ArrowRight' ? 1 : -1;
+      for (let i = index + step; i >= 0 && i < mine.length; i += step) {
+        if (!mine[i].disabled) { target = mine[i]; break; }
+      }
+    } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      let next = e.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
+      while (next && !target) {
+        const theirs = controls(next);
+        target = [theirs[index], ...theirs].find(b => b && !b.disabled) || null;
+        if (!target) next = e.key === 'ArrowDown' ? next.nextElementSibling : next.previousElementSibling;
+      }
+    }
+    if (target) {
+      e.preventDefault();
+      target.focus();
+    }
+  });
+
+  // --- unsupported installs -----------------------------------------------------------------
+
+  const dragons = document.getElementById('dragons');
+  const ack = document.getElementById('ack');
+  const go = document.getElementById('dragons-go');
+  let pendingFolder = false;
+
+  function askDragons(folder) {
+    pendingFolder = folder;
+    ack.checked = false;
+    go.disabled = true;
+    go.textContent = folder ? 'Choose folder…' : 'Choose file…';
+    dragons.showModal();
+    document.getElementById('dragons-cancel').focus();
+  }
+  ack.addEventListener('change', () => { go.disabled = !ack.checked; });
+  document.getElementById('dragons-cancel').addEventListener('click', () => dragons.close());
+  go.addEventListener('click', async () => {
+    dragons.close();
+    statusLine.className = '';
+    statusLine.textContent = '';
+    const result = await api.installUnsupported(pendingFolder);
+    if (result.cancelled) return;
+    if (result.error) {
+      statusLine.className = 'err';
+      statusLine.textContent = `Not installed: ${result.error}`;
+    } else {
+      statusLine.textContent = result.supported
+        ? `${result.name} ${result.version} installed. It turned out to be a supported build.`
+        : `${result.name} ${result.version} installed as an unsupported extension.`;
+    }
+  });
+  document.getElementById('add-crx').addEventListener('click', () => askDragons(false));
+  document.getElementById('add-folder').addEventListener('click', () => askDragons(true));
+
+  // Escape closes the window, as it would a dialog; with the warning open it closes that
+  // instead (the dialog handles its own Escape).
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !dragons.open) api.close();
+  });
+
+  api.onCatalog(render);
+  api.catalog().then(render);
+</script>
+</body>
+</html>

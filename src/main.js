@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BaseWindow, WebContentsView, Menu, dialog, session, shell, ipcMain } = require('electron');
+const { app, BaseWindow, WebContentsView, Menu, dialog, session, shell, ipcMain, nativeTheme } = require('electron');
 const path = require('node:path');
 const windowState = require('./window-state');
 const bridge = require('./bridge');
@@ -289,6 +289,8 @@ function createShellWindow({ adoptedContents = null, url = START_URL, persistBou
     extPopup.destroy();
     shells.delete(chromeView.webContents.id);
     shells.delete(popoverView.webContents.id);
+    // The Manage window is an accessory: it must not keep the app alive on its own.
+    if (shells.size === 0 && manage) manage.win.close();
   });
 
   // BaseWindow has no 'ready-to-show' — that event exists only on BrowserWindow.
@@ -305,49 +307,188 @@ function createShellWindow({ adoptedContents = null, url = START_URL, persistBou
   return shellRef;
 }
 
-// The only way to add an extension. Whatever is chosen still has to pass the allowlist in
-// src/extensions/allowlist.json — being picked here grants nothing.
-// A packaged .crx and an unpacked folder need SEPARATE menu items, because on Linux and
+// ---------------------------------------------------------------------------
+// Manage Extensions window
+// ---------------------------------------------------------------------------
+
+// A window of its own, as browsers do, so it has its own entry in the desktop's overview
+// and window switcher. One at a time: opening it again raises the existing one.
+let manage = null;
+
+// The page follows the desktop's light/dark preference through prefers-color-scheme; the
+// title strip behind the native window buttons is ours to colour, so it follows the same
+// preference. The buttons themselves are still drawn natively, in the user's layout.
+function manageColors() {
+  return nativeTheme.shouldUseDarkColors
+    ? { bg: '#252526', chrome: '#1e1e1f', symbol: '#e4e4e4' }
+    : { bg: '#f6f6f7', chrome: '#e9e9ec', symbol: '#1f1f22' };
+}
+
+function openManageWindow() {
+  if (manage) {
+    if (manage.win.isMinimized()) manage.win.restore();
+    manage.win.show();
+    manage.win.focus();
+    return manage;
+  }
+
+  const colors = manageColors();
+  const win = new BaseWindow({
+    width: 600,
+    height: 440,
+    minWidth: 440,
+    minHeight: 280,
+    title: 'Extensions',
+    backgroundColor: colors.bg,
+    show: false,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: colors.chrome, symbolColor: colors.symbol, height: TOOLBAR_HEIGHT },
+  });
+  // Same rounded-corner arrangement as the main window: see createShellWindow.
+  win.contentView.setBackgroundColor('#00000000');
+
+  const view = new WebContentsView({
+    webPreferences: {
+      preload: path.join(__dirname, 'chrome', 'manage-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  view.setBackgroundColor(colors.bg);
+  win.contentView.addChildView(view);
+
+  const layout = () => {
+    const { width, height } = win.contentView.getBounds();
+    view.setBounds({ x: 0, y: 0, width, height });
+  };
+  win.contentView.on('bounds-changed', layout);
+  win.on('resize', layout);
+
+  const applyCorners = () => view.setBorderRadius(win.isMaximized() || win.isFullScreen() ? 0 : CORNER_RADIUS);
+  applyCorners();
+  for (const e of ['maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen']) win.on(e, applyCorners);
+
+  const retheme = () => {
+    const c = manageColors();
+    win.setTitleBarOverlay({ color: c.chrome, symbolColor: c.symbol, height: TOOLBAR_HEIGHT });
+    win.setBackgroundColor(c.bg);
+    view.setBackgroundColor(c.bg);
+  };
+  nativeTheme.on('updated', retheme);
+
+  // Nothing in this page navigates. Source links go through manage:open-source, which looks
+  // the URL up itself and hands it to the user's browser.
+  view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  view.webContents.on('will-navigate', event => event.preventDefault());
+
+  const push = () => {
+    if (!view.webContents.isDestroyed()) view.webContents.send('manage:catalog', extensions.catalog());
+  };
+  const stopWatching = extensions.onCatalogChange(push);
+
+  manage = { win, view };
+  win.on('closed', () => {
+    stopWatching();
+    nativeTheme.off('updated', retheme);
+    manage = null;
+  });
+
+  view.webContents.once('did-finish-load', () => {
+    layout();
+    push();
+    win.show();
+    view.webContents.focus();
+  });
+  view.webContents.loadFile(path.join(__dirname, 'chrome', 'manage.html'));
+  // Opening the window is the other moment an update check makes sense.
+  extensions.checkForUpdates();
+  return manage;
+}
+
+// Unsupported extensions only: supported ones are downloaded from their listed source.
+// A packaged .crx and an unpacked folder need SEPARATE buttons, because on Linux and
 // Windows one dialog cannot offer both: passing ['openFile','openDirectory'] together
 // silently yields a folder-ONLY chooser, so the .crx is unselectable and "Open" returns
-// whatever folder happened to be showing. That looked like the allowlist rejecting a valid
-// build. Keep these two paths apart.
+// whatever folder happened to be showing. That once looked like the allowlist rejecting a
+// valid build. Keep these two paths apart.
 function installDialogOptions(folder) {
   return folder ? {
-    title: 'Install unpacked extension',
+    title: 'Install unsupported extension',
     message: 'Choose the folder that contains manifest.json',
     properties: ['openDirectory', 'dontAddToRecent'],
   } : {
-    title: 'Install extension',
+    title: 'Install unsupported extension',
     message: 'Choose a .crx file',
     properties: ['openFile', 'dontAddToRecent'],
     filters: [{ name: 'Chrome extension', extensions: ['crx'] }, { name: 'All files', extensions: ['*'] }],
   };
 }
 
-async function installExtension(shellRef, { folder = false } = {}) {
-  closeMenu(shellRef);
-  // In the Flatpak this goes through the xdg-desktop-portal file chooser, which is why the
-  // app needs no home-directory access to install an extension.
-  const { canceled, filePaths } = await dialog.showOpenDialog(shellRef.win, installDialogOptions(folder));
-  if (canceled || filePaths.length === 0) return;
+// Every manage:* message must come from the Manage window's own top frame.
+function fromManage(event) {
+  return Boolean(manage)
+    && event.sender === manage.view.webContents
+    && event.senderFrame === manage.view.webContents.mainFrame;
+}
 
-  try {
-    const result = await extensions.installFromPath(filePaths[0]);
-    await dialog.showMessageBox(shellRef.win, {
-      type: 'info',
-      message: `${result.name} ${result.version} installed`,
-      detail: 'It is available from the toolbar now, and will load on every launch.',
+function registerManageIpc() {
+  ipcMain.handle('manage:catalog', event => (fromManage(event) ? extensions.catalog() : []));
+
+  ipcMain.on('manage:install', (event, key) => {
+    if (fromManage(event)) extensions.installSupported(key);
+  });
+  ipcMain.on('manage:cancel', (event, key) => {
+    if (fromManage(event)) extensions.cancelInstall(key);
+  });
+  ipcMain.on('manage:pin', (event, key, pinned) => {
+    if (fromManage(event)) extensions.setPinned(key, pinned === true);
+  });
+  ipcMain.on('manage:open-source', (event, key) => {
+    if (!fromManage(event)) return;
+    const url = extensions.sourceUrl(key);
+    if (url && url.startsWith('https://')) shell.openExternal(url);
+  });
+  ipcMain.on('manage:close', (event) => {
+    if (fromManage(event)) manage.win.close();
+  });
+
+  // A native confirmation, so it looks like the rest of the user's desktop.
+  ipcMain.handle('manage:remove', async (event, key) => {
+    if (!fromManage(event)) return false;
+    const row = extensions.catalog().find(r => r.key === key && r.installedVersion);
+    if (!row) return false;
+    const { response } = await dialog.showMessageBox(manage.win, {
+      type: 'question',
+      buttons: ['Cancel', 'Remove'],
+      defaultId: 0,
+      cancelId: 0,
+      message: `Remove ${row.name}?`,
+      detail: row.supported
+        ? 'You can install it again from this window.'
+        : 'To use it again you will need its .crx file or folder.',
     });
-  } catch (e) {
-    const reasons = e instanceof extensions.RefusedError ? e.reasons.join('\n') : e.message;
-    console.error('[extensions] install refused:', reasons);
-    await dialog.showMessageBox(shellRef.win, {
-      type: 'error',
-      message: 'That extension was not installed',
-      detail: `${reasons}\n\nShapeShell installs only extensions on its built-in allowlist, in the exact builds it has reviewed.`,
-    });
-  }
+    if (response !== 1) return false;
+    extensions.uninstall(key);
+    return true;
+  });
+
+  // The page has already shown the unsupported-extension warning and had it accepted.
+  // In the Flatpak the chooser is the xdg-desktop-portal one, which is why the app needs no
+  // home-directory access to install from a file.
+  ipcMain.handle('manage:install-unsupported', async (event, folder) => {
+    if (!fromManage(event)) return { cancelled: true };
+    const { canceled, filePaths } = await dialog.showOpenDialog(manage.win, installDialogOptions(folder === true));
+    if (canceled || filePaths.length === 0) return { cancelled: true };
+    try {
+      const result = await extensions.installFromPath(filePaths[0], { allowUnsupported: true });
+      return { name: result.name, version: result.version, supported: result.supported };
+    } catch (e) {
+      const reasons = e instanceof extensions.RefusedError ? e.reasons.join('\n') : e.message;
+      console.error('[extensions] install refused:', reasons);
+      return { error: reasons };
+    }
+  });
 }
 
 // Resolves the shell an IPC message belongs to, and rejects anything not sent by that
@@ -393,6 +534,7 @@ function registerIpc() {
       y: Math.round(Number.isFinite(y) ? y : TOOLBAR_HEIGHT),
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward(),
+      updatesAvailable: extensions.updatesAvailable(),
     });
   });
 
@@ -428,8 +570,11 @@ function registerIpc() {
       case 'reload': contents.reload(); break;
       case 'home': contents.loadURL(DOCUMENTS_URL); break;
       case 'newWindow': createShellWindow().win.show(); break;
-      case 'installExtension': installExtension(shellRef); return;
-      case 'installExtensionFolder': installExtension(shellRef, { folder: true }); return;
+      case 'manageExtensions':
+        // Hidden without refocusing Onshape, which would pull focus back from the new window.
+        shellRef.popoverView.setVisible(false);
+        openManageWindow();
+        return;
       case 'quit': app.quit(); return;
       default: return;
     }
@@ -463,11 +608,15 @@ function main() {
     bridge.installCertificateTrust(ses);
     bridge.start();
     registerIpc();
+    registerManageIpc();
     // Before any window exists: extensions must be loaded before the first navigation, and
     // Electron does not remember them across launches.
     await extensions.init(ses);
 
     createShellWindow({ persistBounds: true }).win.show();
+    // Once per launch, in the background: all it can do is light the dot on Manage
+    // Extensions. Nothing is ever installed without the user asking.
+    extensions.checkForUpdates();
 
     app.on('activate', () => {
       if (shells.size === 0) createShellWindow().win.show();
@@ -487,4 +636,14 @@ function main() {
 // the app would start with no window and no error.
 if (process.env.SHAPESHELL_TEST_HARNESS !== '1') main();
 
-module.exports = { createShellWindow, registerIpc, installDialogOptions, PARTITION, TOOLBAR_HEIGHT, START_URL };
+module.exports = {
+  createShellWindow,
+  registerIpc,
+  registerManageIpc,
+  openManageWindow,
+  manageWindow: () => manage,
+  installDialogOptions,
+  PARTITION,
+  TOOLBAR_HEIGHT,
+  START_URL,
+};

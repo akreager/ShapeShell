@@ -6,9 +6,12 @@
 // on every boot. So this module loads them on startup, and our own preload reports every
 // action call (badge, title, icon, popup) here, where the toolbar tray can render it.
 //
-// Extensions come from two places: those installed through the allowlist (checked again on
-// every launch, since Electron forgets them), and, when running from source only,
-// SHAPESHELL_DEV_EXTENSIONS for development. See docs/extensions-plan.md.
+// Extensions come from two places: those installed from the Manage Extensions window
+// (checked again on every launch, since Electron forgets them), and, when running from
+// source only, SHAPESHELL_DEV_EXTENSIONS for development. See docs/extensions-plan.md.
+//
+// This module also owns what that window shows: the supported list merged with what is
+// installed, update availability, pins, and any install in progress.
 
 const { app, ipcMain } = require('electron');
 const EventEmitter = require('node:events');
@@ -16,6 +19,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const apiHost = require('./api-host');
 const installer = require('./install');
+const allowlistModule = require('./allowlist');
+const updates = require('./updates');
 
 const PRELOAD = path.join(__dirname, 'preload.js');
 // Extension contexts report action state on these; nothing else may send them.
@@ -32,9 +37,10 @@ const LISTEN_CHANNEL = 'shapeshell-ext:listens';
 const STORAGE_CHANGED_CHANNEL = 'shapeshell-ext:storage-changed';
 
 const emitter = new EventEmitter();
-const state = new Map(); // extension id -> { extension, action }
+const state = new Map(); // extension id -> { extension, action, key }
 let extSession = null;
 let extensionsDir = null;
+let prefsFile = null;
 
 function log(...args) {
   console.log('[extensions]', ...args);
@@ -149,11 +155,14 @@ function devExtensionPaths() {
     .filter(Boolean);
 }
 
-async function loadUnpacked(dir) {
+// `key` is the install key (store id or slug) of an installed extension; dev extensions
+// have none and are always shown in the tray.
+async function loadUnpacked(dir, key = null) {
   const resolved = path.resolve(dir);
   const extension = await extSession.extensions.loadExtension(resolved);
   state.set(extension.id, {
     extension,
+    key,
     action: defaultAction(extension),
     listeners: new Set(),
     // A content-script-only extension has no worker to wake, and asking for one fails.
@@ -168,6 +177,8 @@ async function loadUnpacked(dir) {
 async function init(ses) {
   extSession = ses;
   extensionsDir = path.join(app.getPath('userData'), 'Extensions');
+  prefsFile = path.join(app.getPath('userData'), 'extension-prefs.json');
+  prefs = readPrefs();
 
   // Runs inside every extension service worker before its own script, which is what lets
   // Bitwarden start at all: it reads chrome.webNavigation at the top level, and Electron has
@@ -217,20 +228,17 @@ async function init(ses) {
 
   // Installed extensions are re-checked here, not just at install time: an app update can
   // drop an entry from the allowlist, and files can change on disk.
-  let installed = { ready: [], skipped: [] };
-  try {
-    installed = installer.verifyInstalled(extensionsDir);
-  } catch (e) {
-    log(`the allowlist could not be read, so no installed extension will load: ${e.message}`);
-  }
+  installedCache = null;
+  const installed = installedState();
   for (const { key, reasons } of installed.skipped) {
     log(`NOT loading ${key}: ${reasons.join('; ')}`);
   }
-  for (const { path: dir, record } of installed.ready) {
+  for (const { key, path: dir, record } of installed.ready) {
     try {
-      await loadUnpacked(dir);
+      await loadUnpacked(dir, key);
     } catch (e) {
       log(`FAILED to load ${record.name}: ${e.message}`);
+      errors.set(key, `It could not be loaded: ${e.message}`);
     }
   }
 
@@ -243,34 +251,281 @@ async function init(ses) {
   }
 }
 
-// Checks a .crx file or unpacked folder against the allowlist and, if it passes, installs and
-// loads it. Throws installer.RefusedError with readable reasons when it does not.
-async function installFromPath(source) {
-  const result = installer.install(source, extensionsDir);
-  const extension = await loadUnpacked(result.path);
-  log(`installed ${result.name} ${result.version}`);
-  return { ...result, extension };
+// ---------------------------------------------------------------------------------------
+// Installing, updating, and what the Manage Extensions window shows
+// ---------------------------------------------------------------------------------------
+
+let prefs = { pinned: {} };
+const latest = new Map(); // install key -> newest store build { version, url, sha256, size }, or null
+const ops = new Map(); // install key -> { phase, received, total, controller }
+const errors = new Map(); // install key -> the last failure, shown on its row
+let installedCache = null;
+let lastProgressEmit = 0;
+
+function readPrefs() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(prefsFile, 'utf8'));
+    return { pinned: parsed && typeof parsed.pinned === 'object' && parsed.pinned ? parsed.pinned : {} };
+  } catch {
+    return { pinned: {} };
+  }
+}
+
+function writePrefs() {
+  try {
+    fs.writeFileSync(prefsFile, JSON.stringify(prefs, null, 2));
+  } catch (e) {
+    log(`could not save extension preferences: ${e.message}`);
+  }
+}
+
+// Pinned unless the user unpinned it: installing is itself a request to use the thing.
+function isPinned(key) {
+  return prefs.pinned[key] !== false;
+}
+
+function setPinned(key, pinned) {
+  if (typeof key !== 'string') return;
+  prefs.pinned[key] = Boolean(pinned);
+  writePrefs();
+  emitter.emit('changed');
+}
+
+function readAllowlist() {
+  try {
+    return allowlistModule.load();
+  } catch (e) {
+    log(`the supported list could not be read: ${e.message}`);
+    return { extensions: [] };
+  }
+}
+
+const keyOfEntry = entry => entry.id || entry.slug;
+
+// Re-hashing every installed tree is not free (Bitwarden is 80MB unpacked), so the result
+// is kept until an install or removal changes it.
+function installedState() {
+  if (!installedCache) {
+    try {
+      installedCache = installer.verifyInstalled(extensionsDir);
+    } catch (e) {
+      installedCache = { ready: [], skipped: [] };
+      log(`installed extensions could not be checked: ${e.message}`);
+    }
+  }
+  return installedCache;
+}
+
+function installedRecords() {
+  const { ready, skipped } = installedState();
+  return new Map([
+    ...ready.map(r => [r.key, { record: r.record, reasons: [] }]),
+    ...skipped.map(s => [s.key, { record: s.record, reasons: s.reasons }]),
+  ]);
+}
+
+function loadedByKey(key) {
+  return [...state.values()].find(e => e.key === key) || null;
+}
+
+function unloadKey(key) {
+  const entry = loadedByKey(key);
+  if (!entry) return;
+  extSession.extensions.removeExtension(entry.extension.id);
+  state.delete(entry.extension.id);
+}
+
+// Progress arrives per network chunk; the window needs a few updates a second, not hundreds.
+function setOp(key, op) {
+  if (op) ops.set(key, op);
+  else ops.delete(key);
+  const now = Date.now();
+  if (op?.phase === 'downloading' && now - lastProgressEmit < 100) return;
+  lastProgressEmit = now;
+  emitter.emit('catalog');
+}
+
+// install.js calls beforeSwap only once every check has passed, so the running copy is
+// unloaded at the last moment and a refused update leaves it running.
+async function installAndLoad(installFn) {
+  const result = installFn({ beforeSwap: key => unloadKey(key) });
+  installedCache = null;
+  errors.delete(result.key);
+  try {
+    await loadUnpacked(result.path, result.key);
+  } catch (e) {
+    errors.set(result.key, `Installed, but it could not be loaded: ${e.message}`);
+    throw e;
+  } finally {
+    emitter.emit('changed');
+  }
+  log(`installed ${result.name} ${result.version}${result.previousVersion ? ` (was ${result.previousVersion})` : ''}`);
+  return result;
+}
+
+/**
+ * Installs a .crx file or unpacked folder chosen by the user. Without `allowUnsupported`
+ * only a supported build passes; with it, anything that parses does — the Manage window
+ * passes it only after the user accepted the unsupported-extension warning.
+ * Throws installer.RefusedError with readable reasons when it does not pass.
+ */
+async function installFromPath(source, { allowUnsupported = false } = {}) {
+  return installAndLoad(o => installer.install(source, extensionsDir, { ...o, allowUnsupported }));
+}
+
+/**
+ * Installs or updates an extension by downloading it: a supported one from its listed
+ * source, or an unsupported store extension from the Web Store. Progress and failures are
+ * reported through catalog(), not thrown.
+ */
+async function installSupported(key) {
+  if (typeof key !== 'string' || ops.has(key)) return;
+  const entry = readAllowlist().extensions.find(e => keyOfEntry(e) === key) || null;
+  const record = installedRecords().get(key)?.record || null;
+  const controller = new AbortController();
+  const onProgress = (received, total) => setOp(key, { phase: 'downloading', received, total, controller });
+  errors.delete(key);
+  setOp(key, { phase: 'checking', received: 0, total: null, controller });
+
+  try {
+    if (entry?.archive) {
+      const files = await updates.downloadGithubArchive(entry.archive, { signal: controller.signal, onProgress });
+      setOp(key, { phase: 'installing', controller });
+      await installAndLoad(o => installer.installFiles(files, extensionsDir, { ...o, source: updates.githubArchiveUrl(entry.archive) }));
+    } else {
+      const id = entry ? entry.id : record?.id;
+      if (!id) throw new Error('There is nowhere to download this extension from');
+      const found = (await updates.checkWebstore([id])).get(id) || null;
+      latest.set(key, found);
+      if (!found) throw new Error('The Chrome Web Store does not offer this extension');
+      const bytes = await updates.downloadCrx(found, { signal: controller.signal, onProgress });
+      setOp(key, { phase: 'installing', controller });
+      await installAndLoad(o => installer.installCrx(bytes, extensionsDir, {
+        ...o,
+        expectId: id,
+        // An unsupported extension was accepted as such when first installed; its updates
+        // are held to the same terms, and a supported id is always held to its entry.
+        allowUnsupported: !entry,
+        source: found.url,
+      }));
+    }
+  } catch (e) {
+    if (!controller.signal.aborted) {
+      const message = e instanceof installer.RefusedError ? e.reasons.join('; ') : e.message;
+      errors.set(key, record ? `The update was not installed; ${record.version} is still in use. ${message}` : message);
+      log(`install of ${key} failed: ${message}`);
+    }
+  } finally {
+    setOp(key, null);
+  }
+}
+
+function cancelInstall(key) {
+  ops.get(key)?.controller.abort();
+}
+
+// Asks the Web Store about every installed store extension, supported or not, in one
+// request. Only the ids of installed extensions leave the machine. GitHub builds need no
+// check: their newest reviewed build ships in the list itself.
+let checking = null;
+function checkForUpdates() {
+  if (checking) return checking;
+  checking = (async () => {
+    const ids = [...installedRecords().values()].map(({ record }) => record?.id).filter(Boolean);
+    if (ids.length === 0) return;
+    try {
+      const found = await updates.checkWebstore(ids);
+      for (const id of ids) latest.set(id, found.get(id) ?? null);
+      log(`update check: ${ids.map(id => `${id.slice(0, 8)}=${found.get(id)?.version ?? 'not in store'}`).join(' ')}`);
+    } catch (e) {
+      log(`update check failed: ${e.message}`);
+    }
+    emitter.emit('catalog');
+  })().finally(() => { checking = null; });
+  return checking;
+}
+
+function catalogRow(key, entry, installed) {
+  const record = installed?.record || null;
+  const loaded = loadedByKey(key);
+  const store = latest.get(key);
+  let latestVersion = null;
+  let updateAvailable = false;
+  if (entry?.archive) {
+    latestVersion = entry.archive.version;
+    updateAvailable = Boolean(record) && record.sourceTreeSha256 !== entry.archive.treeSha256;
+  } else if (store) {
+    latestVersion = store.version;
+    updateAvailable = Boolean(record) && allowlistModule.compareVersions(store.version, record.version) > 0;
+  }
+  const op = ops.get(key);
+  let sourceUrl = entry?.source || null;
+  if (!sourceUrl && record?.id && store) sourceUrl = `https://chromewebstore.google.com/detail/${record.id}`;
+  if (!sourceUrl) sourceUrl = record?.homepage || null;
+  return {
+    key,
+    name: entry?.name || record?.name || key,
+    supported: Boolean(entry),
+    hasSource: Boolean(sourceUrl),
+    sourceLabel: entry?.archive ? 'GitHub' : sourceUrl?.startsWith('https://chromewebstore.google.com/') ? 'Chrome Web Store' : 'Homepage',
+    installedVersion: record?.version || null,
+    latestVersion,
+    updateAvailable,
+    // Something to download from: a supported entry, or an unsupported store extension.
+    downloadable: Boolean(entry) || Boolean(record?.id && store),
+    problem: installed?.reasons.length ? installed.reasons.join('; ') : null,
+    loaded: Boolean(loaded),
+    canPin: Boolean(loaded?.action.hasAction),
+    pinned: isPinned(key),
+    icon: loaded?.action.icon || null,
+    op: op ? { phase: op.phase, received: op.received || 0, total: op.total || null } : null,
+    error: errors.get(key) || null,
+  };
+}
+
+/** Every row the Manage Extensions window shows: the supported list, then anything else installed. */
+function catalog() {
+  const installed = installedRecords();
+  const rows = readAllowlist().extensions.map(entry => catalogRow(keyOfEntry(entry), entry, installed.get(keyOfEntry(entry))));
+  for (const [key, info] of installed) {
+    if (!rows.some(r => r.key === key)) rows.push(catalogRow(key, null, info));
+  }
+  return rows;
+}
+
+function updatesAvailable() {
+  return catalog().some(r => r.updateAvailable);
+}
+
+/** The page a row links to, looked up by key so the window never supplies a URL itself. */
+function sourceUrl(key) {
+  const row = catalog().find(r => r.key === key);
+  if (!row?.hasSource) return null;
+  const entry = readAllowlist().extensions.find(e => keyOfEntry(e) === key);
+  const record = installedRecords().get(key)?.record;
+  return entry?.source
+    || (record?.id && latest.get(key) ? `https://chromewebstore.google.com/detail/${record.id}` : null)
+    || record?.homepage
+    || null;
 }
 
 function listInstalled() {
-  try {
-    const { ready, skipped } = installer.verifyInstalled(extensionsDir);
-    return {
-      ready: ready.map(({ record }) => ({ key: record.id || record.slug, name: record.name, version: record.version })),
-      skipped,
-    };
-  } catch (e) {
-    return { ready: [], skipped: [{ key: 'allowlist', reasons: [e.message] }] };
-  }
+  const { ready, skipped } = installedState();
+  return {
+    ready: ready.map(({ key, record }) => ({ key, name: record.name, version: record.version, supported: record.supported !== false })),
+    skipped: skipped.map(({ key, reasons }) => ({ key, reasons })),
+  };
 }
 
 function uninstall(key) {
-  const entry = [...state.values()].find(e => e.extension.path.startsWith(path.join(extensionsDir, key) + path.sep));
-  if (entry) {
-    extSession.extensions.removeExtension(entry.extension.id);
-    state.delete(entry.extension.id);
-  }
+  if (typeof key !== 'string' || ops.has(key)) return;
+  unloadKey(key);
   installer.uninstall(extensionsDir, key);
+  installedCache = null;
+  delete prefs.pinned[key];
+  writePrefs();
+  errors.delete(key);
+  latest.delete(key);
   emitter.emit('changed');
   log(`uninstalled ${key}`);
 }
@@ -329,7 +584,12 @@ function emitToExtension(extId, name, args) {
   for (const shellRef of apiHost.liveWindows()) {
     const view = shellRef.extPopup?.view;
     if (view && shellRef.extPopup.extId === extId && !view.webContents.isDestroyed()) {
-      view.webContents.send(EVENT_CHANNEL, name, args);
+      // While a popup navigates within itself (Bitwarden reloads its page after unlocking),
+      // the old frame is disposed before the new one commits. webContents.send() then logs a
+      // stack trace per event, "Render frame was disposed". Nothing is lost by skipping it:
+      // the incoming page reads its state fresh when it loads.
+      const frame = view.webContents.mainFrame;
+      if (frame && !frame.isDestroyed() && !frame.detached) frame.send(EVENT_CHANNEL, name, args);
     }
   }
 }
@@ -425,10 +685,11 @@ function detachWindow(shellRef) {
   if (windowId !== null) emitToAll('windows.onRemoved', [windowId]);
 }
 
-// What the toolbar tray draws. Extensions with no action (content-script only) are omitted.
+// What the toolbar tray draws: pinned extensions that have an action. Content-script-only
+// extensions have nothing to click, so they never appear.
 function listActions() {
   return [...state.values()]
-    .filter(e => e.action.hasAction)
+    .filter(e => e.action.hasAction && (e.key === null || isPinned(e.key)))
     .map(({ extension, action }) => ({
       id: extension.id,
       name: extension.name,
@@ -479,10 +740,23 @@ module.exports = {
   detachWindow,
   emitToExtension,
   installFromPath,
+  installSupported,
+  cancelInstall,
+  checkForUpdates,
+  catalog,
+  updatesAvailable,
+  setPinned,
+  sourceUrl,
   listInstalled,
   uninstall,
   RefusedError: installer.RefusedError,
   get,
   preloadPath: PRELOAD,
   onChange: (fn) => { emitter.on('changed', fn); return () => emitter.off('changed', fn); },
+  // The Manage window's rows: every tray change, plus progress and update checks.
+  onCatalogChange: (fn) => {
+    emitter.on('changed', fn);
+    emitter.on('catalog', fn);
+    return () => { emitter.off('changed', fn); emitter.off('catalog', fn); };
+  },
 };

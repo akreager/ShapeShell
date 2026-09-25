@@ -10,8 +10,9 @@
 //   "CRX3 SignedData\x00" | uint32le(len(signed_header_data)) | signed_header_data | zip
 //
 // The signature proves the file is internally consistent — that whoever holds the private
-// key for this id produced it. It says nothing about whether that author is trustworthy,
-// which is what the allowlist's hash pin is for.
+// key for this id produced it. It says nothing about whether that author is trustworthy:
+// that is the supported list's job, which names the ids we accept and caps what their
+// manifests may ask for (allowlist.js).
 
 const crypto = require('node:crypto');
 

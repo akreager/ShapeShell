@@ -1,17 +1,20 @@
 'use strict';
 
-// The allowlist and the policy checks run against it (extensions phase 3).
+// The supported-extension list and the policy checks run against it.
 //
-// The list ships inside the app (allowlist.json) and is read-only: extensions arrive only
-// through ShapeShell releases, decided 2026-09-19. A user-editable list would defeat the
-// check, and we expect few users who need a particular extension.
+// The list ships inside the app (allowlist.json) and is read-only. Decided 2026-09-24: it is
+// the catalog the Manage Extensions window offers, and store extensions on it track their
+// newest release. Anything not on it can still be installed, behind an explicit warning, as
+// an "unsupported" extension. See docs/extensions-plan.md, Decisions.
 //
 // What each check is for:
 //   identity   which extension this is — a signed CRX proves its own id; an unpacked folder
-//              has no key, so it is identified by the slug it installs under
-//   pin        that these are the exact reviewed bytes. This, not the signature, is what
-//              ties an install to something a human looked at
-//   policy     that the manifest asks for no more than the entry approves
+//              has no key, so it is identified by its contents
+//   pin        unpacked folders only: that these are the exact reviewed files. A folder is
+//              unsigned, so its hash is the only evidence there is
+//   policy     that the manifest asks for no more than the entry approves. For a store
+//              extension this replaces the old byte pin: the signature proves the publisher,
+//              and the ceiling catches an update that suddenly wants more access
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -82,10 +85,14 @@ function hashTree(dir) {
   return digest.digest('hex');
 }
 
-/** The same hash, computed from zip entries rather than a directory on disk. */
+/**
+ * The same hash, computed from in-memory entries rather than a directory on disk.
+ * Must sort exactly as hashTree does (plain code-unit order): it once used localeCompare,
+ * which orders "_locales" and capitals differently, so the two could never agree.
+ */
 function hashEntries(entries) {
   const digest = crypto.createHash('sha256');
-  for (const { name, data } of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+  for (const { name, data } of [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
     digest.update(name);
     digest.update('\0');
     digest.update(sha256(data));

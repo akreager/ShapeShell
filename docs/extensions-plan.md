@@ -1,10 +1,10 @@
 # Extension support: plan
 
-Branch: `feature/extensions`. Status: phases 0 and 1 done, phase 2 built and awaiting a real Bitwarden login — see [Phase 0 results](#phase-0-results), [Phase 1 results](#phase-1-results) and [Phase 2 results](#phase-2-results). The tray and popups work; there is no install path yet, so extensions load only from `SHAPESHELL_DEV_EXTENSIONS` when running from source. Replaces the design-only handoff from 2026-09-19. Where the two disagree, this file wins; `CLAUDE.md` wins over both.
+Branch: `feature/extensions`. Status: phases 0-4 and 6 done — see [Phase 0 results](#phase-0-results), [Phase 1 results](#phase-1-results), [Phase 2 results](#phase-2-results), [Phase 3 results](#phase-3-results) and [Phase 4 results](#phase-4-results-manage-extensions). Bitwarden works end to end (login, 2FA, unlock, autofill), verified against a real vault. Extensions are installed, updated, pinned and removed from the **Manage Extensions** window, which downloads supported extensions itself; `SHAPESHELL_DEV_EXTENSIONS` still side-loads from source for development. Replaces the design-only handoff from 2026-09-19. Where the two disagree, this file wins; `CLAUDE.md` wins over both.
 
 ## Goal
 
-Let the user install Chrome extensions that are on an allowlist shipped with the app. Pinned extensions sit in a toolbar tray and open their popups. Bitwarden is the first target.
+Let the user install Chrome extensions from a supported list shipped with the app, and, behind an explicit warning, anything else. Pinned extensions sit in a toolbar tray and open their popups. Bitwarden is the first target.
 
 ## Target extensions
 
@@ -24,12 +24,11 @@ Let the user install Chrome extensions that are on an allowlist shipped with the
 2. **The allowlist needs two ways to identify an extension.** A store CRX has a stable ID derived from its key. A GitHub-only unpacked extension has no `key`, so its ID would depend on its path. For those, the allowlist pins a hash of the reviewed file tree, and the install copies the files to a fixed path (`Extensions/<slug>/`) so the ID, and the extension's storage, stay stable across reinstalls.
 3. **Host permissions are granted per allowlist entry, not capped at `cad.onshape.com`.** Bitwarden needs `<all_urls>`, and Onshape sign-in and SSO pass through other hosts. Each broad grant is an explicit, reviewed line in the allowlist.
 4. **Missing APIs are supplied by preloads, never by editing extension files.** A service-worker preload (`ses.registerPreloadScript({ type: 'service-worker' })`) and a per-view preload on the popup views we create install the missing namespaces into the extension's own `chrome` object via `contextBridge.executeInMainWorld`, backed by the main process over IPC. The extension tree stays byte-identical to what was reviewed, so the hash pin can be checked on every launch. The Onshape content view still gets no preload, since the frame preload is set only on extension views. The service-worker preload is session-wide, so it also runs for any service worker Onshape registers. There its main-world function reaches only a `location.protocol` guard and returns, and its preload realm exposes nothing.
-5. **Build from pinned source where the license allows.** This is the same pattern as `fetch-bridge`: open-source extensions like Bitwarden can be built from a pinned commit instead of trusting a store CRX. This is optional; a pinned CRX hash is also acceptable.
+5. **Build from pinned source where the license allows.** This is the same pattern as `fetch-bridge`: open-source extensions like Bitwarden can be built from a pinned commit instead of trusting a store CRX. This is optional; a pinned CRX hash is also acceptable. *Superseded 2026-09-24: store extensions now track their newest release, verified by signature and a permission ceiling, with no byte pin. See [Decisions](#decisions).*
 
 ## UI
 
-- Hamburger popover, "Install extension…": opens the portal file chooser (`.crx` or a folder).
-- Hamburger popover, "Extensions": lists each extension with pin and remove buttons.
+- ~~Hamburger popover, "Install extension…"~~ and ~~"Extensions"~~: replaced 2026-09-24 by a single **Manage Extensions…** item, which opens its own window. See [Phase 4 results](#phase-4-results-manage-extensions).
 - Tray: pinned extension icons left of the hamburger. It must respect `env(titlebar-area-width)` for left-side window-button layouts. Every click returns focus to the content view. No `role:` items.
 
 ## Phases
@@ -38,11 +37,11 @@ Each phase ends with something runnable. None of them touch `main` until the fea
 
 0. ~~**API survey.**~~ DONE. `npm run ext-survey`; results below. It ran in a throwaway profile rather than `persist:onshape`, so the survey can never disturb a real sign-in.
 1. ~~**Tray and popup host.**~~ DONE; results below. Still outstanding from this phase, because it needs a signed-in session: the drawing-editor content scripts and `all_frames` on the `production-drawing-*` iframe.
-2. **Bitwarden compatibility.** Implementations built and tested against a fixture; login, unlock and autofill against a real vault are still to confirm. See [Phase 2 results](#phase-2-results).
+2. ~~**Bitwarden compatibility.**~~ DONE; login, 2FA, unlock and autofill verified against a real vault. See [Phase 2 results](#phase-2-results).
 3. ~~**Install pipeline and allowlist.**~~ DONE; results below. The menu can install; the management UI is phase 4.
-4. **Management UI.** List, pin, remove, and a clear message when an install is refused.
+4. ~~**Management UI.**~~ DONE; results below. Redesigned 2026-09-24 as the Manage Extensions window.
 5. **Flatpak.** Portal chooser, persistence under `~/.var/app/…`, and no new finish-args.
-6. **Getting the package in the first place** — see [Installing without a browser](#installing-without-a-browser). Deferred to a later release (2026-09-20).
+6. ~~**Getting the package in the first place.**~~ DONE with phase 4: supported extensions are downloaded by the app. See [Installing without a browser](#installing-without-a-browser).
 
 Regression checks after every phase: SpaceMouse still drives the viewport, the bridge cert is still pinned (rogue-server test), `Seccomp: 2` on the renderers, frame time unchanged, and extension-opened windows go through `createWindow` or are blocked.
 
@@ -201,7 +200,7 @@ Decisions made while building it:
 
 Verified beyond the unit tests: the real Bitwarden CRX installs against the shipped allowlist and derives its true Web Store id (`nngceckbapebfimnlniiiahkandclblb`), the real Drawing Comfort folder installs identified purely by its contents, and changing one byte of either makes it refuse. The smoke test covers the whole path in a running window — an unlisted extension refused, an allowlisted one installed, loaded and drawn in the tray.
 
-The hamburger menu has **Install Extension…** for a `.crx` and **Install Unpacked Folder…** for a folder, each opening a file chooser (the xdg-desktop-portal one under Flatpak, so no home access is needed) and reporting refusals with their reasons.
+*(Superseded by phase 4: these moved into the Manage Extensions window as the unsupported-install buttons.)* The hamburger menu has **Install Extension…** for a `.crx` and **Install Unpacked Folder…** for a folder, each opening a file chooser (the xdg-desktop-portal one under Flatpak, so no home access is needed) and reporting refusals with their reasons.
 
 These are two menu items because they have to be. A single dialog asking for both `openFile`
 and `openDirectory` becomes a **folder-only** chooser on Linux and Windows, which is how it
@@ -210,9 +209,35 @@ chooser was showing. The refusal then named the hash of that folder, so a correc
 refusing a bad path read exactly like the allowlist rejecting a good build. `npm run
 smoke-extensions` now asserts neither dialog asks for both.
 
+## Phase 4 results: Manage Extensions
+
+Built 2026-09-24 from the approved mockup. The hamburger menu's two install items are replaced by **Manage Extensions…**, which opens a window of its own (as browsers do, so it appears in the desktop's overview and window switcher; one at a time, and it closes with the last main window).
+
+- **`src/chrome/manage.html`** + **`manage-preload.js`**: one row per supported extension, then one per installed unsupported one. Each row has a source link (opened in the default browser; the page sends a key and main looks the URL up), install/update, pin and remove. Download progress, an update-refused message and a "Not loaded" reason show on the row. Remove asks through a native dialog.
+- **Unsupported installs** go through the footer buttons, after the "here be dragons" dialog: Cancel is focused, and the confirm button stays disabled until "I understand" is ticked. Once installed they behave like any other extension, with an "Unsupported" badge. A store-signed unsupported extension can also be updated from the store.
+- **`src/extensions/updates.js`**: the Web Store update check (one request for every installed store id, `v=0.0.0.0` so it returns the newest build with its URL, sha256 and size), CRX download, and GitHub archive download. All through the default session, with size ceilings. The download's sha256 is transport integrity only; install.js still verifies the signature.
+- **Update checks**: once at launch in the background, and when the window opens. An available update lights a dot on the Manage Extensions menu item. Nothing is installed automatically.
+- **Pins** live in `extension-prefs.json` in userData. A new install is pinned; unpinning hides it from the tray.
+- **Look**: system font, light/dark from the system (the page via `prefers-color-scheme`, the title strip via `nativeTheme`, so the native window buttons sit on a matching strip), neutral greys and a fixed accent, since Chromium on Linux does not map CSS `AccentColor` to the desktop theme reliably.
+
+**Trust model.** A store extension on the list installs its newest release if the CRX signature proves the listed id and the manifest stays under the entry's floor and permission ceiling. There is no byte pin. A build that asks for more is refused, and an update refused this way leaves the installed version running: `install.js` only calls back to unload it after every check has passed. A supported id arriving through the unsupported path is still held to its entry. Drawing Comfort installs from GitHub's archive of the reviewed commit, which hashes identically to a clone (verified), and stays pinned. An unsupported install must still parse, and a CRX must still verify.
+
+Found and fixed along the way:
+
+- **Installed extensions now update in place at a fixed path** (`Extensions/<key>/current`). Electron derives an unpacked extension's id from its path, and `chrome.storage` is keyed by the id, so the phase 3 layout (`<key>/<version>`) would have wiped an extension's data on every update. Existing installs keep their version-named directory, recorded as `dir` in the marker, so their id never changes.
+- **Chromium deletes `_metadata/` from every unpacked extension it loads.** Store CRXs ship `_metadata/verified_contents.json`, so under phase 3 the first launch changed the installed tree and **every later launch refused Bitwarden as "changed on disk"**, reporting it only in the log. The installer now never writes `_metadata/`. An install already in that state shows "Not loaded" with a **Reinstall** button, which rewrites it in place and keeps its id and data.
+- **`hashEntries` sorted differently from `hashTree`** (`localeCompare` against code-unit order), so an archive could never match its folder's pin. It had no caller until now.
+
+Verified: `npm run test-extensions` 66 passed (`TEST_NETWORK=1` adds a live store download and a live GitHub archive install, both passing). `npm run smoke-extensions` covers the menu entry, the rows, light and dark screenshots, the warning's gating, an unsupported install, pin and unpin reaching the tray, and removal; `SMOKE_NETWORK=1` adds a one-click Bitwarden install from the store, which goes through checking, downloading and installing and still passes its checks after Chromium has loaded it. `npm run smoke-launch` passes.
+
+Not yet verified: the native window buttons' strip colour against a light GNOME theme, and the window on KDE or another desktop. A screen capture does not include the natively drawn buttons.
+
 ## Installing without a browser
 
-Deferred to a later release; raised 2026-09-20 when the owner found they had no way to obtain
+**Resolved 2026-09-24**, as recommended below: signed store builds track the newest release,
+unpacked builds stay pinned. Implemented in phase 4; the reasoning is kept as the record.
+
+Originally deferred to a later release; raised 2026-09-20 when the owner found they had no way to obtain
 a `.crx` at all, having no Chrome installed. Today the only route is `curl` against Google's
 update endpoint, which is what `scripts/ext-survey.sh` does — a developer step, not a feature.
 Requiring users to install Chrome in order to de-Chrome their Onshape session is absurd.
@@ -259,7 +284,13 @@ be decided deliberately rather than slipped in with the download button.
 ## Decisions
 
 - **An extension's id is left path-derived; the store key is not injected (2026-09-20).** Bitwarden's login, 2FA, unlock and autofill all work with an id derived from its install path, so nothing depends on the Web Store id at runtime. The installed path is fixed under the app's data directory, so the id is stable across launches and updates.
-- **The allowlist ships with the app; there are no user-added entries (2026-09-19).** Extensions arrive only through ShapeShell releases. We expect few users, and fewer still who need a particular extension, so the friction is acceptable. If demand grows, we can add user entries later behind deliberately discouraging warnings.
+- **The supported list is the extension experience; anything else installs behind a warning (2026-09-24).** Supersedes the allowlist-only decision below. The two install menu items are replaced by **Manage Extensions…**, a separate window (as browsers do) listing supported extensions. Each row has a source link (Web Store or GitHub, opened in the default browser), install/update, pin and remove. Footer buttons install an unsupported `.crx` or unpacked folder after a "here be dragons" dialog: Cancel is the default, and confirm stays disabled until an "I understand" box is ticked. Once installed, an unsupported extension behaves like any other (pin, remove), with an "Unsupported" badge.
+  - **Store extensions track the latest release.** This resolves the version skew in [Installing without a browser](#installing-without-a-browser): a store CRX is accepted on a valid signature for the listed id, a version floor, and a permission ceiling. A build that asks for more than the ceiling is refused and the installed version kept. There is no byte pin. Unpacked extensions (Drawing Comfort) stay pinned.
+  - **Updates are manual.** Nothing installs automatically. ShapeShell checks once at launch (one cookieless request per store extension in the default session) and again when the window opens; an available update shows as a dot on the Manage Extensions menu item and in the window, nothing else.
+  - **The first release lists only Bitwarden and Drawing Comfort.** Extending support should mostly mean editing the list, not the app.
+  - **Look:** system font, light/dark from the system, native window buttons, neutral greys and a fixed accent, so it fits GNOME without imposing Adwaita elsewhere. Approved mockup: https://claude.ai/artifact/58J2Jax1YdB8T3DJEjJFrT
+- ~~**The allowlist ships with the app; there are no user-added entries (2026-09-19).**~~ Superseded 2026-09-24, above.
+  Original text: Extensions arrive only through ShapeShell releases. We expect few users, and fewer still who need a particular extension, so the friction is acceptable. If demand grows, we can add user entries later behind deliberately discouraging warnings.
 
 ## Open questions
 

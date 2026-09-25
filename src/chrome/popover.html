@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>ShapeShell menu</title>
 <style>
-  :root { --panel: #303033; --fg: #e4e4e4; --fg-dim: #7d7d81; --hover: #3f3f44; --line: #4a4a4f; }
+  :root { --panel: #303033; --fg: #e4e4e4; --fg-dim: #7d7d81; --hover: #3f3f44; --line: #4a4a4f; --accent: #6ea0f0; }
   * { box-sizing: border-box; }
   html, body {
     margin: 0;
@@ -50,6 +50,9 @@
   button:hover:not(:disabled) { background: var(--hover); }
   button:disabled { color: var(--fg-dim); }
   hr { height: 1px; margin: 5px 2px; border: 0; background: var(--line); }
+  /* Updates are never installed automatically; this dot is the only sign one exists. */
+  .dot { display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
+  .dot[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -63,8 +66,7 @@
   <button data-act="home">Documents</button>
   <button data-act="newWindow">New Window</button>
   <hr>
-  <button data-act="installExtension">Install Extension…</button>
-  <button data-act="installExtensionFolder">Install Unpacked Folder…</button>
+  <button data-act="manageExtensions" id="manage">Manage Extensions…<span class="dot" id="updates" title="Updates available" hidden></span></button>
   <hr>
   <button data-act="quit">Quit</button>
 </div>
@@ -90,6 +92,9 @@
   window.menuApi.onOpen((state) => {
     document.getElementById('back').disabled = !state.canGoBack;
     document.getElementById('forward').disabled = !state.canGoForward;
+    document.getElementById('updates').hidden = !state.updatesAvailable;
+    document.getElementById('manage').setAttribute('aria-label',
+      state.updatesAvailable ? 'Manage Extensions… (updates available)' : 'Manage Extensions…');
 
     panel.hidden = false;
     // Anchor under the hamburger, clamped so the panel never leaves the window.

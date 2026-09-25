@@ -11,7 +11,7 @@
 // loads a local page rather than cad.onshape.com: this tests our chrome, not the site. That
 // page carries one iframe, so frame enumeration has something real to report.
 
-const { app, session } = require('electron');
+const { app, session, nativeTheme } = require('electron');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
@@ -30,7 +30,7 @@ process.env.SHAPESHELL_DEV_EXTENSIONS = dirs.join(path.delimiter);
 // Stops src/main.js starting the app itself; this file builds the window instead.
 process.env.SHAPESHELL_TEST_HARNESS = '1';
 
-const { createShellWindow, registerIpc, installDialogOptions, PARTITION } = require('../src/main');
+const { createShellWindow, registerIpc, registerManageIpc, openManageWindow, manageWindow, installDialogOptions, PARTITION } = require('../src/main');
 const extensions = require('../src/extensions/manager');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -82,6 +82,7 @@ app.whenReady().then(async () => {
   });
   await extensions.init(ses);
   registerIpc();
+  registerManageIpc();
 
   step('building the window');
   const server = await servePages();
@@ -344,6 +345,111 @@ app.whenReady().then(async () => {
       value: Array.isArray(trayTitles) ? trayTitles : String(trayTitles),
     });
     results.push({ check: 'it is listed as installed and passing its checks', value: extensions.listInstalled() });
+  }
+
+  // The Manage Extensions window: the menu entry that opens it, its rows, the unsupported
+  // warning's gate, and an unsupported install whose pin reaches the tray.
+  step('checking the Manage Extensions window');
+  {
+    await shell.chromeView.webContents.executeJavaScript(`document.getElementById('menu').click()`);
+    await sleep(600);
+    const menuItems = await limit(shell.popoverView.webContents.executeJavaScript(
+      `[...document.querySelectorAll('[data-act]')].map(b => b.dataset.act)`), 5000, []);
+    results.push({
+      check: 'the menu offers Manage Extensions and no install items',
+      value: menuItems.includes('manageExtensions') && !menuItems.some(a => /^install/.test(a)) ? menuItems : `WRONG: ${JSON.stringify(menuItems)}`,
+    });
+    await shell.popoverView.webContents.executeJavaScript(`document.querySelector('[data-act="manageExtensions"]').click()`);
+    await sleep(2500);
+    const manage = manageWindow();
+    results.push({ check: 'the menu entry opens the Manage window', value: Boolean(manage && manage.win.isVisible()) });
+
+    if (manage) {
+      const mwc = manage.view.webContents;
+      const readRows = () => limit(mwc.executeJavaScript(`[...document.querySelectorAll('#list li')].map(li => ({
+        name: li.querySelector('.name').textContent.trim(),
+        sub: li.querySelector('.sub').textContent.trim(),
+        buttons: [...li.querySelectorAll('.actions button')].map(b => (b.disabled ? '(' + b.title + ')' : b.title)),
+        msg: li.querySelector('.msg')?.textContent.trim() || null,
+      }))`), 5000, 'timed out');
+      results.push({ check: 'Manage rows', value: await readRows() });
+
+      for (const theme of ['light', 'dark']) {
+        nativeTheme.themeSource = theme;
+        await sleep(700);
+        results.push({ check: `Manage window screenshot (${theme})`, value: await shot(manage.view, `manage-${theme}`) });
+      }
+      nativeTheme.themeSource = 'system';
+
+      // The confirm button must stay disabled until the box is ticked.
+      const gate = await limit(mwc.executeJavaScript(`(() => {
+        document.getElementById('add-crx').click();
+        const d = document.getElementById('dragons'), go = document.getElementById('dragons-go');
+        const before = { open: d.open, goDisabled: go.disabled, focused: document.activeElement.id };
+        document.getElementById('ack').click();
+        const after = go.disabled;
+        return { ...before, goDisabledAfterTick: after };
+      })()`), 5000, 'timed out');
+      results.push({ check: 'unsupported warning: open, Cancel focused, confirm gated by the tick box', value: gate });
+      await sleep(600); // let the modal paint before capturing
+      results.push({ check: 'warning screenshot', value: await shot(manage.view, 'manage-warning') });
+      await mwc.executeJavaScript(`document.getElementById('dragons-cancel').click()`);
+
+      // An unsupported extension, built here so it cannot be confused with the dev fixtures.
+      const unsupportedDir = path.join(OUT, 'unsupported-probe');
+      fs.mkdirSync(unsupportedDir, { recursive: true });
+      fs.writeFileSync(path.join(unsupportedDir, 'manifest.json'), JSON.stringify({
+        manifest_version: 3, name: 'Unsupported probe', version: '0.1', action: { default_title: 'Unsupported probe' },
+      }));
+      let unsupported = null;
+      try {
+        unsupported = await extensions.installFromPath(unsupportedDir, { allowUnsupported: true });
+      } catch (e) {
+        unsupported = { error: e.message };
+      }
+      results.push({ check: 'an unsupported folder installs once the warning is accepted', value: unsupported.error ? `REFUSED: ${unsupported.error}` : `${unsupported.key} supported=${unsupported.supported}` });
+      await sleep(1200);
+      const trayHas = () => limit(shell.chromeView.webContents.executeJavaScript(
+        `[...document.querySelectorAll('#tray button')].some(b => b.title === 'Unsupported probe')`), 5000, 'timed out');
+      const pinnedAtInstall = await trayHas();
+      // Through the page's own button, so the IPC route and its sender check are exercised.
+      if (!unsupported.error) {
+        await limit(mwc.executeJavaScript(
+          `document.querySelector('button[data-role="pin"][data-key="${unsupported.key}"]')?.click()`), 5000, 'timed out');
+      }
+      await sleep(800);
+      const afterUnpin = await trayHas();
+      results.push({ check: 'installed extensions are pinned; unpinning removes them from the tray', value: { pinnedAtInstall, afterUnpin } });
+      const row = (await readRows()).find?.(r => r.name.startsWith('Unsupported probe'));
+      results.push({ check: 'the unsupported extension has its own row', value: row || 'NO ROW' });
+      if (!unsupported.error) extensions.uninstall(unsupported.key);
+      await sleep(600);
+      results.push({ check: 'removing it drops the row', value: !(await readRows()).some?.(r => r.name.startsWith('Unsupported probe')) });
+
+      // The one-click path against the real Web Store: opt-in, since it downloads 23MB.
+      if (process.env.SMOKE_NETWORK === '1') {
+        step('installing Bitwarden from the Web Store (SMOKE_NETWORK=1)');
+        const bw = 'nngceckbapebfimnlniiiahkandclblb';
+        const phases = new Set();
+        const stopWatch = extensions.onCatalogChange(() => {
+          const op = extensions.catalog().find(r => r.key === bw)?.op;
+          if (op) phases.add(op.phase);
+        });
+        const running = extensions.installSupported(bw);
+        const until = Date.now() + 20000;
+        while (Date.now() < until && extensions.catalog().find(r => r.key === bw)?.op?.phase !== 'downloading') await sleep(100);
+        await sleep(400);
+        results.push({ check: 'download progress screenshot', value: await shot(manage.view, 'manage-downloading') });
+        await limit(running, 120000, null);
+        stopWatch();
+        const row = (await readRows()).find(r => r.name.startsWith('Bitwarden'));
+        results.push({ check: 'Bitwarden installed from the store in one click', value: { phases: [...phases], row } });
+        results.push({ check: 'installed-state screenshot', value: await shot(manage.view, 'manage-installed') });
+      }
+
+      manage.win.close();
+      await sleep(500);
+    }
   }
 
   // Closing a window with a popup open used to throw "Object has been destroyed" out of the
