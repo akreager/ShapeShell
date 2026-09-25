@@ -36,7 +36,7 @@ Let the user install Chrome extensions from a supported list shipped with the ap
 Each phase ends with something runnable. None of them touch `main` until the feature is done.
 
 0. ~~**API survey.**~~ DONE. `npm run ext-survey`; results below. It ran in a throwaway profile rather than `persist:onshape`, so the survey can never disturb a real sign-in.
-1. ~~**Tray and popup host.**~~ DONE; results below. Still outstanding from this phase, because it needs a signed-in session: the drawing-editor content scripts and `all_frames` on the `production-drawing-*` iframe.
+1. ~~**Tray and popup host.**~~ DONE; results below. The drawing-editor content scripts, including `all_frames` on the `production-drawing-*` iframe, were verified by hand in a signed-in session on 2026-09-24: Drawing Comfort draws its window in a real drawing, and all three palettes and its on/off toggle work.
 2. ~~**Bitwarden compatibility.**~~ DONE; login, 2FA, unlock and autofill verified against a real vault. See [Phase 2 results](#phase-2-results).
 3. ~~**Install pipeline and allowlist.**~~ DONE; results below. The menu can install; the management UI is phase 4.
 4. ~~**Management UI.**~~ DONE; results below. Redesigned 2026-09-24 as the Manage Extensions window.
@@ -291,6 +291,10 @@ be decided deliberately rather than slipped in with the download button.
   - **Look:** system font, light/dark from the system, native window buttons, neutral greys and a fixed accent, so it fits GNOME without imposing Adwaita elsewhere. Approved mockup: https://claude.ai/artifact/58J2Jax1YdB8T3DJEjJFrT
 - ~~**The allowlist ships with the app; there are no user-added entries (2026-09-19).**~~ Superseded 2026-09-24, above.
   Original text: Extensions arrive only through ShapeShell releases. We expect few users, and fewer still who need a particular extension, so the friction is acceptable. If demand grows, we can add user entries later behind deliberately discouraging warnings.
+
+## Known bugs
+
+- **Tray clicks are lost when the worker is asleep** (found 2026-09-24 with Rally for Onshape, an unsupported install). For an extension with no popup, `click()` in `src/extensions/manager.js` sends `chrome.action.onClicked` only to an already-running service worker; Chrome idles MV3 workers after ~30s, so later clicks log `no running worker to receive a click` and do nothing. Bitwarden hides this because it has a popup. Fix: wake the worker with `startWorkerForScope` as `emitToExtension()` already does, and have the in-worker shim queue a click that arrives before an `onClicked` listener registers. Add a smoke case: popup-less fixture, stop its worker, click, assert `onClicked` fires.
 
 ## Open questions
 
