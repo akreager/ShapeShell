@@ -1,6 +1,17 @@
 Onshape Appliance — Build Handoff
 Fresh, minimal Electron shell for Onshape with the SpaceMouse bridge baked in, packaged as AppImage + Flatpak, with a Stream Deck profile that switches in when the app is focused. This doc is the spec to hand to a build session (Claude Code or otherwise) — it locks in the decisions from earlier research so nothing needs re-litigating.
 
+> **SUPERSEDED IN PART — read [CLAUDE.md](CLAUDE.md) first.** This is the original handoff,
+> kept as the record of why the project started the way it did. It is no longer maintained,
+> and where the two disagree CLAUDE.md is authoritative. The decisions below have already been
+> overturned by measurement:
+>
+> - **Name** — the app is **ShapeShell**, app ID `io.github.akreager.ShapeShell`, not "Onshape Appliance".
+> - **`navigator.platform` spoof** — dropped entirely. Onshape no longer gates the SpaceMouse path on it, so there is no CDP debugger and no `src/preload.js`.
+> - **Loopback alias** — dropped. Every `127.x.x.x` address is already bindable and routable on Linux, so the systemd unit, the `pkexec` helper and the whole privileged first-run step do not exist.
+> - **Packaging** — Flatpak only. AppImage runs unsandboxed on Ubuntu 24.04+ and integrates no launcher icon.
+> - **Stream Deck** — no daemon is built. StreamController matches ShapeShell's `wm_class`; see [docs/streamdeck.md](docs/streamdeck.md).
+
 Goal
 A single launchable "appliance": a chrome-less window running cad.onshape.com with live 6-DOF SpaceMouse input working out of the box (no manual bridge process, no manual cert import, no Tampermonkey), packaged so it installs cleanly on a clean machine, plus a Stream Deck profile that auto-activates for CAD shortcuts when that window has focus.
 
