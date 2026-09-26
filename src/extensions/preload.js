@@ -150,22 +150,34 @@ contextBridge.executeInMainWorld({
       // Electron defines action.onClicked but never fires it, so replace it outright: the
       // tray is what clicks the action, and only in the background context.
       if (isWorker) {
-        const clicked = event();
-        const listeners = [];
-        replace(action, 'onClicked', {
-          addListener: (fn) => { listeners.push(fn); clicked.addListener(fn); },
-          removeListener: (fn) => clicked.removeListener(fn),
-          hasListener: (fn) => clicked.hasListener(fn),
-          hasListeners: () => clicked.hasListeners(),
-        });
-        host.onClicked(async (clickedId) => {
-          if (clickedId !== extId) return;
-          // Chrome passes the active tab; ours comes from the main process.
+        const listeners = new Set();
+        // A click that wakes a stopped worker can arrive before the extension has added its
+        // listener, if it does so after an await. Chrome would drop that click; holding it
+        // for a few seconds is more forgiving and costs nothing.
+        let pendingSince = 0;
+        const fire = async () => {
+          // Chrome passes the active tab; ours comes from the main process. invoke() rather
+          // than host.invoke(): a just-woken worker can call before its IPC handler exists.
           let tab;
-          try { tab = (await host.invoke(extId, 'tabs.query', [{ active: true, currentWindow: true }]))?.[0]; } catch { /* no window */ }
-          for (const fn of listeners) {
+          try { tab = (await invoke('tabs.query', [{ active: true, currentWindow: true }]))?.[0]; } catch { /* no window */ }
+          for (const fn of [...listeners]) {
             try { fn(tab); } catch (e) { console.error('[shapeshell] action.onClicked listener failed', e); }
           }
+        };
+        replace(action, 'onClicked', {
+          addListener: (fn) => {
+            listeners.add(fn);
+            if (pendingSince && Date.now() - pendingSince < 5000) fire();
+            pendingSince = 0;
+          },
+          removeListener: (fn) => { listeners.delete(fn); },
+          hasListener: (fn) => listeners.has(fn),
+          hasListeners: () => listeners.size > 0,
+        });
+        host.onClicked((clickedId) => {
+          if (clickedId !== extId) return;
+          if (listeners.size === 0) { pendingSince = Date.now(); return; }
+          fire();
         });
       }
     }

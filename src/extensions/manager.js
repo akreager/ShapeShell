@@ -710,20 +710,26 @@ function popupUrl(extId) {
 
 // Clicking the tray icon of an extension with no popup is chrome.action.onClicked, which
 // only means anything in the background context.
+//
+// An idle MV3 worker is stopped after ~30s, so a click usually finds none running, and
+// Chrome wakes the worker to deliver it. Ours does the same; without this, only a click
+// within 30s of the worker's last activity did anything.
 function click(extId) {
   const entry = state.get(extId);
   if (!entry) return false;
-  const running = extSession.serviceWorkers.getAllRunning();
-  for (const [versionId, info] of Object.entries(running)) {
-    if (!info.scope || !info.scope.startsWith(entry.extension.url)) continue;
-    const worker = extSession.serviceWorkers.getWorkerFromVersionID(Number(versionId));
-    if (worker && !worker.isDestroyed()) {
-      worker.send(CLICK_CHANNEL, extId);
-      return true;
-    }
+  const running = runningWorkers().find(w => w.scope && w.scope.startsWith(entry.extension.url));
+  if (running) {
+    running.worker.send(CLICK_CHANNEL, extId);
+    return true;
   }
-  log(`no running worker to receive a click for ${entry.extension.name}`);
-  return false;
+  if (!entry.hasWorker) {
+    log(`${entry.extension.name} has no popup and no background worker, so a click does nothing`);
+    return false;
+  }
+  extSession.serviceWorkers.startWorkerForScope(entry.extension.url)
+    .then(worker => worker.send(CLICK_CHANNEL, extId))
+    .catch(e => log(`could not wake the worker for ${entry.extension.name} to receive a click: ${e.message}`));
+  return true;
 }
 
 function get(extId) {

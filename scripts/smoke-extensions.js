@@ -252,6 +252,31 @@ app.whenReady().then(async () => {
     });
     shell.extPopup.close();
     await sleep(500);
+
+    // Regression: a tray click on a popup-less extension was only delivered to a worker that
+    // was already running, so once it idled every click was dropped. The fixture's title
+    // carries a per-instance tag, so a new title proves a freshly woken worker got the click.
+    const actionProbe = extensions.listActions().find(a => a.name === 'ShapeShell action probe');
+    if (actionProbe) {
+      const actionScope = `chrome-extension://${actionProbe.id}/`;
+      const actionStopped = () => workerStatus.get(actionScope) === 'stopped'
+        || !Object.values(ses.serviceWorkers.getAllRunning()).some(info => info.scope === actionScope);
+      step('waiting for the action probe worker to stop (up to 60s)');
+      const actionDeadline = Date.now() + 60000;
+      while (Date.now() < actionDeadline && !actionStopped()) await sleep(2000);
+      const wasStopped = actionStopped();
+      const titleBefore = extensions.listActions().find(a => a.id === actionProbe.id)?.title;
+      await limit(shell.chromeView.webContents.executeJavaScript(
+        `[...document.querySelectorAll('#tray button')].find(b => b.title.startsWith('Action probe')).click()`), 5000, 'click timed out');
+      await sleep(4000);
+      const titleAfter = extensions.listActions().find(a => a.id === actionProbe.id)?.title;
+      results.push({
+        check: wasStopped
+          ? 'a click wakes a stopped worker and reaches onClicked (title should change)'
+          : 'a click reaches onClicked (worker never stopped, so this did not exercise a wake)',
+        value: { titleBefore, titleAfter, delivered: titleAfter !== titleBefore && String(titleAfter).startsWith('Action probe: clicked') },
+      });
+    }
     }
   }
 
