@@ -84,6 +84,23 @@
       "contentScriptMatches": [
         "https://*.onshape.com/*"
       ]
+    },
+    {
+      "id": "hanbmgaepnkkmmgafdpfocnjhfccckoh",
+      "slug": "rally-for-onshape",
+      "name": "Rally for Onshape",
+      "source": "https://chromewebstore.google.com/detail/hanbmgaepnkkmmgafdpfocnjhfccckoh",
+      "reviewed": "2026-09-26, version 1.2.29; tracks the newest store release",
+      "notes": "MIT licensed, source at github.com/RileyDavidson-Evans/Rally-for-Onshape. The 1.2.29 store build was verified byte-identical to the author's CI-built GitHub release of tag v1.2.29, apart from the store's update_url. Touch and productivity overlays for Onshape: floating toolbar, number pad, context actions, canvas backgrounds. Storage only, and scoped to onshape.com. Verified working in ShapeShell 2026-09-26 in a live Part Studio: theme, page bridge and floating toolbar. It has no background worker and no popup, so its toolbar icon does nothing when clicked, as in Chrome; its settings live inside the Onshape page. It injects a page-world script (onshape-page-bridge.js) that drives Onshape's own Angular services, loads the Poppins font from Google Fonts, and loads Unsplash images only if a canvas background preset is chosen. It makes no other network requests and uses no eval. Its Ctrl+Shift+R command is inert here: ShapeShell registers no extension shortcuts.",
+      "minVersion": "1.2.29",
+      "permissions": [
+        "storage"
+      ],
+      "optionalPermissions": [],
+      "hostPermissions": [],
+      "contentScriptMatches": [
+        "https://*.onshape.com/*"
+      ]
     }
   ]
 }

@@ -447,6 +447,9 @@ app.whenReady().then(async () => {
       results.push({ check: 'installed extensions are pinned; unpinning removes them from the tray', value: { pinnedAtInstall, afterUnpin } });
       const row = (await readRows()).find?.(r => r.name.startsWith('Unsupported probe'));
       results.push({ check: 'the unsupported extension has its own row', value: row || 'NO ROW' });
+      // Installed while the window was open, so it must say a reload is needed.
+      results.push({ check: 'a row installed while the window is open asks for a page reload', value: /need a reload/.test(row?.msg || '') ? row.msg : `no reload note (${row?.msg})` });
+      results.push({ check: 'reload note screenshot', value: await shot(manage.view, 'manage-reload-note') });
       if (!unsupported.error) extensions.uninstall(unsupported.key);
       await sleep(600);
       results.push({ check: 'removing it drops the row', value: !(await readRows()).some?.(r => r.name.startsWith('Unsupported probe')) });

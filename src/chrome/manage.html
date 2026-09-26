@@ -86,6 +86,8 @@
   .msg { grid-column: 2 / 4; font-size: 12px; padding: 5px 8px; border-radius: 4px; display: flex; gap: 6px; align-items: flex-start; user-select: text; }
   .msg.err { background: var(--err-bg); color: var(--err); }
   .msg.warn { background: var(--warn-bg); color: var(--warn); }
+  .msg.info { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--fg); }
+  .msg.info svg { color: var(--accent); }
 
   footer { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
   footer .lbl { font-size: 12px; color: var(--fg-dim); margin-right: auto; }
@@ -266,17 +268,36 @@
       : r.pinned ? 'Unpin from toolbar' : 'Pin to toolbar';
     const pin = iconButton({ role: 'pin', key: r.key, symbol: 'i-pin', label: pinLabel, disabled: !r.canPin || busy, pressed: r.canPin ? r.pinned : null, onClick: () => api.pin(r.key, !r.pinned) });
 
-    const remove = iconButton({ role: 'remove', key: r.key, symbol: 'i-rm', label: installed ? `Remove ${r.name}` : 'Remove (not installed)', variant: 'danger', disabled: !installed || busy, onClick: () => api.remove(r.key) });
+    const remove = iconButton({ role: 'remove', key: r.key, symbol: 'i-rm', label: installed ? `Remove ${r.name}` : 'Remove (not installed)', variant: 'danger', disabled: !installed || busy, onClick: () => removeRow(r) });
 
     const li = el('li', { class: 'row', 'data-key': r.key }, ico, text, el('div', { class: 'actions' }, first, pin, remove));
     if (r.error) li.append(el('div', { class: 'msg err', role: 'alert' }, icon('i-warn'), el('span', {}, r.error)));
     else if (r.problem) li.append(el('div', { class: 'msg warn' }, icon('i-warn'), el('span', {}, `Not loaded: ${r.problem}`)));
+    else if (needsReload.has(r.key)) li.append(el('div', { class: 'msg info', role: 'status' }, icon('i-up'), el('span', {}, 'Onshape pages that were already open need a reload to pick up this change.')));
     return li;
+  }
+
+  // Content scripts are injected as a page loads, so an install, update or removal reaches an
+  // Onshape page that is already open only once it is reloaded — in Chrome too (measured
+  // 2026-09-26 with Rally for Onshape, both ways). Rows that changed while this window was
+  // open say so. The first render is the baseline, so nothing installed earlier is flagged.
+  let previous = null; // key -> { version, loaded } as of the last render
+  const needsReload = new Set();
+  function noteChanges(rows) {
+    if (previous) {
+      for (const r of rows) {
+        const before = previous.get(r.key);
+        if (!r.installedVersion || !r.loaded) needsReload.delete(r.key);
+        else if (!before || before.version !== r.installedVersion || !before.loaded) needsReload.add(r.key);
+      }
+    }
+    previous = new Map(rows.map(r => [r.key, { version: r.installedVersion || null, loaded: Boolean(r.loaded) }]));
   }
 
   // Rows are redrawn on every change, including download progress, so keyboard focus is
   // carried across by what it was on rather than by element.
   function render(rows) {
+    noteChanges(rows);
     const active = document.activeElement;
     const focus = list.contains(active) ? { key: active.dataset.key, role: active.dataset.role } : null;
     list.replaceChildren(...rows.map(renderRow));
@@ -314,6 +335,13 @@
       target.focus();
     }
   });
+
+  // On the status line rather than the row: an unsupported extension's row goes with it.
+  async function removeRow(r) {
+    if (!(await api.remove(r.key))) return;
+    statusLine.className = '';
+    statusLine.textContent = `${r.name} removed. Onshape pages that were already open keep running it until they are reloaded.`;
+  }
 
   // --- unsupported installs -----------------------------------------------------------------
 

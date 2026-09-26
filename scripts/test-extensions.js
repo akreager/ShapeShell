@@ -739,14 +739,18 @@ if (fs.existsSync(bitwarden) && fs.existsSync(drawingComfort)) {
 
 // Live network checks are opt-in, so the suite never depends on Google or GitHub being up.
 if (process.env.TEST_NETWORK === '1') {
-  asyncTests.push(() => asyncTest('LIVE: the store offers Bitwarden, and its newest build installs under the shipped list', async () => {
-    const id = 'nngceckbapebfimnlniiiahkandclblb';
-    const found = (await updates.checkWebstore([id], { fetch: globalThis.fetch, chromeVersion: '152.0.7977.78' })).get(id);
-    assert.ok(found, 'the store did not offer Bitwarden');
-    const bytes = await updates.downloadCrx(found, { fetch: globalThis.fetch });
-    const result = install.installCrx(bytes, path.join(TMP, 'live-bitwarden'), { expectId: id });
-    assert.equal(result.version, found.version);
-  }));
+  // Every store entry, so a new one is covered without a test of its own, and an upstream
+  // release that outgrows its permission ceiling shows up here before a user hits it.
+  for (const entry of allowlistModule.load().extensions.filter(e => e.id)) {
+    asyncTests.push(() => asyncTest(`LIVE: the store offers ${entry.name}, and its newest build installs under the shipped list`, async () => {
+      const found = (await updates.checkWebstore([entry.id], { fetch: globalThis.fetch, chromeVersion: '152.0.7977.78' })).get(entry.id);
+      assert.ok(found, `the store did not offer ${entry.name}`);
+      const bytes = await updates.downloadCrx(found, { fetch: globalThis.fetch });
+      const result = install.installCrx(bytes, path.join(TMP, `live-${entry.slug}`), { expectId: entry.id });
+      assert.equal(result.version, found.version);
+      assert.equal(result.name, entry.name);
+    }));
+  }
   asyncTests.push(() => asyncTest('LIVE: GitHub\'s archive of the pinned Drawing Comfort commit installs', async () => {
     const entry = allowlistModule.load().extensions.find(e => e.archive);
     const files = await updates.downloadGithubArchive(entry.archive, { fetch: globalThis.fetch });
