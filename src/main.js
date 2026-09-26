@@ -99,6 +99,14 @@ function applyPermissionPolicy(ses) {
   });
 }
 
+// Electron titles a download's save dialog with its URL, which for an Onshape export is an
+// unreadable blob: address. Title it as a browser would; the dialog still asks where to save.
+function titleSaveDialogs(ses) {
+  ses.on('will-download', (_event, item) => {
+    item.setSaveDialogOptions({ title: 'Save File' });
+  });
+}
+
 // `adoptedContents` is set when Chromium hands us a child window's webContents via the
 // setWindowOpenHandler 'createWindow' path — it must be adopted exactly, not recreated.
 function createShellWindow({ adoptedContents = null, url = START_URL, persistBounds = false } = {}) {
@@ -371,6 +379,7 @@ function main() {
     const ses = session.fromPartition(PARTITION);
     applyPermissionPolicy(ses);
     bridge.installCertificateTrust(ses);
+    titleSaveDialogs(ses);
     bridge.start();
     registerIpc();
 
